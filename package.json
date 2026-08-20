@@ -7,6 +7,8 @@
     "start": "electron .",
     "postinstall": "playwright install chromium",
     "build:mac": "electron-builder --mac",
+    "postbuild:mac": "find dist -maxdepth 2 -name '*.app' -exec xattr -cr {} \\; -exec codesign --force --deep --sign - {} \\;",
+    "install:mac": "npm run build:mac && rm -rf \"/Applications/PartnerTax Automat.app\" && cp -R \"$(find dist -maxdepth 2 -name '*.app' | head -1)\" /Applications/ && echo 'Zainstalowano w /Applications'",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux"
   },
