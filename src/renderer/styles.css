@@ -1,0 +1,203 @@
+body {
+  font-family: -apple-system, Segoe UI, Arial, sans-serif;
+  max-width: 640px;
+  margin: 32px auto;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+h1 {
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: #555;
+  font-size: 13px;
+  margin-top: 0;
+  margin-bottom: 24px;
+}
+
+.platform-section {
+  margin-bottom: 28px;
+}
+
+.platform-section h2 {
+  font-size: 16px;
+  margin: 0 0 4px 0;
+}
+
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.platform-card {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.btn-add {
+  margin-top: 10px;
+  background: #eef2ff;
+  color: #1a3fbf;
+}
+
+.period-row {
+  margin-top: 4px;
+}
+
+.period-options {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.period-option {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.period-custom-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.period-custom-dates input {
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.platform-note {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 12px 0;
+}
+
+.field-row {
+  margin-bottom: 8px;
+}
+
+.field-row label {
+  display: block;
+  font-size: 12px;
+  color: #444;
+  margin-bottom: 2px;
+}
+
+.field-row input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-save {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.btn-delete {
+  background: #f1f1f1;
+  color: #a00;
+}
+
+.status-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+
+.status-badge.saved {
+  background: #e6f4ea;
+  color: #1e7e34;
+}
+
+.status-badge.empty {
+  background: #f1f1f1;
+  color: #888;
+}
+
+.save-feedback {
+  font-size: 12px;
+  color: #1e7e34;
+  margin-left: 4px;
+}
+
+.run-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+}
+
+.btn-run {
+  background: #0b8043;
+  color: #fff;
+}
+
+.btn-run:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.run-status {
+  font-size: 12px;
+  color: #555;
+  word-break: break-all;
+}
+
+.checklist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #a00;
+}
+
+.checklist-item.checked {
+  color: #1e7e34;
+}
+
+.checklist-item input[type='checkbox'] {
+  cursor: default;
+}

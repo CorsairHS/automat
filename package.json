@@ -1,0 +1,52 @@
+{
+  "name": "partnertax-automat",
+  "version": "0.1.0",
+  "description": "Lokalny automat do pobierania raportow z Uber/Bolt/Freenow i wgrywania ich do PartnerTax admin",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "playwright install chromium",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "author": "PartnerTax",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "extract-zip": "^2.0.1",
+    "playwright": "^1.47.0"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "pl.partnertax.automat",
+    "productName": "PartnerTax Automat",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}
