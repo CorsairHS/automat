@@ -70,9 +70,9 @@ async function syncFreenowAccount({ context, account, downloadDir, statusCallbac
   // pasuje do DWOCH linkow na stronie - linku w menu bocznym "Zarobki" i linku
   // "Szczegoly zarobkow" gdzies indziej na stronie (np. na dashboardzie). Trzeba
   // celowac dokladnie w link z tekstem "Zarobki", nie samym href.
-  await page.getByRole('link', { name: 'Zarobki', exact: true }).click();
+  await humanClick(page.getByRole('link', { name: 'Zarobki', exact: true }));
   await humanDelay(400, 900);
-  await page.getByRole('button', { name: /zarobki z vat/i }).click();
+  await humanClick(page.getByRole('button', { name: /zarobki z vat/i }));
   await humanDelay(300, 700);
 
   await page.locator('[data-testid="start-date-input"]').fill(formatFreenowDate(from));
@@ -85,7 +85,7 @@ async function syncFreenowAccount({ context, account, downloadDir, statusCallbac
   log('Czekam na eksport pliku CSV (wariant WITH VAT)...');
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 120000 }),
-    page.locator('[data-testid="download-csv-file"]').click(),
+    humanClick(page.locator('[data-testid="download-csv-file"]')),
   ]);
 
   const zipPath = path.join(downloadDir, download.suggestedFilename());

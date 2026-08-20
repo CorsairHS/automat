@@ -48,9 +48,9 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // Zweryfikowane na zywym DOM (2026-08-18): zakladka "Reports" (data-testid stabilne
   // niezaleznie od jezyka), przycisk "Generate Report" (data-tracking-name stabilne)
   // otwiera panel z polami Report type / Start Date / End Date / Select organizations.
-  await page.locator('[data-testid="header-nav-/reports"]').click();
+  await humanClick(page.locator('[data-testid="header-nav-/reports"]'));
   await humanDelay(400, 900);
-  await page.locator('[data-tracking-name="report-generation-initiated"]').click();
+  await humanClick(page.locator('[data-tracking-name="report-generation-initiated"]'));
   await humanDelay(400, 900);
 
   // Domyslny "Report type" to "Driver Activity"/"Czas i odleglosc kierowcy" - trzeba
@@ -60,11 +60,11 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // ktory zawiera zagniezdzony div z tym samym tekstem - getByRole unikalnie trafia w
   // zewnetrzny element, w przeciwienstwie do filtrowania po [aria-selected] (kolizja z
   // zagniezdzonym divem).
-  await page.locator('#report-type').click();
+  await humanClick(page.locator('#report-type'));
   await humanDelay(300, 700);
-  await page
-    .getByRole('option', { name: /^Payments Driver$|^P[łl]atno[śs]ci\s*[-–]\s*kierowc/i })
-    .click();
+  await humanClick(
+    page.getByRole('option', { name: /^Payments Driver$|^P[łl]atno[śs]ci\s*[-–]\s*kierowc/i })
+  );
   await humanDelay(400, 900);
 
   // Zweryfikowane na zywo (2026-08-18): pole "Report time range" jest domyslnie zwiniete
@@ -77,7 +77,7 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // id/aria-controls segment "reports/" (np. "tabs-bui1-tab-reports/report-schedules"),
   // zakladki w panelu nie - filtrujemy po tym, zeby zawezic do panelu.
   const timeFrameTrigger = page.getByPlaceholder(/select time frame for report|wybierz przedzia. czasowy raportu/i);
-  await timeFrameTrigger.click();
+  await humanClick(timeFrameTrigger);
   // Dopasowanie po pozycji (nth(1)) okazalo sie zawodne - prawdopodobnie animacja panelu
   // chwilowo duplikuje/podmienia elementy zakladek w DOM. Dopasowujemy po dokladnym
   // tekscie (oba zaobserwowane warianty jezykowe) i klikamy z force:true, na wypadek
@@ -89,7 +89,7 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   await customRangeTab.waitFor({ state: 'visible' });
   for (let attempt = 0; attempt < 8; attempt++) {
     if ((await customRangeTab.getAttribute('aria-selected')) === 'true') break;
-    await customRangeTab.click({ force: true });
+    await humanClick(customRangeTab, { force: true });
     await page.waitForTimeout(300);
   }
   const dateInputs = page.locator('input[aria-label="Select a date range."]');
@@ -109,7 +109,7 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   await page.waitForTimeout(200);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  await timeFrameTrigger.click();
+  await humanClick(timeFrameTrigger);
 
   // Pole organizacji jest readonly (klikniecie otwiera liste, nie da sie wpisac tekstu).
   // Zweryfikowany na zywo polski placeholder "Wybierz organizacje, ktore chcesz
@@ -119,17 +119,17 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // sasiedni span), Playwright odmawia klikniecia w niewidoczny element, wiec klikamy
   // zamiast tego otaczajacy <label> (rodzic inputu), co dziala jak natywne toggle.
   if (account.company) {
-    await page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i).click();
+    await humanClick(page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i));
     await humanDelay(300, 700);
     const orgCheckbox = page.getByRole('checkbox', { name: new RegExp(account.company, 'i') });
-    await orgCheckbox.locator('xpath=..').click();
+    await humanClick(orgCheckbox.locator('xpath=..'));
     await humanDelay(300, 600);
     await page.keyboard.press('Escape');
     await humanDelay(300, 600);
   }
 
   await humanDelay(300, 700);
-  await page.getByRole('button', { name: /^generate$|^wygeneruj$/i }).click();
+  await humanClick(page.getByRole('button', { name: /^generate$|^wygeneruj$/i }));
   // Dialog "Wygeneruj raport" NIE zamyka sie sam po kliknieciu - zaslania tabele i
   // blokuje kliknieca w przycisk pobierania ponizej. Zamykamy go (zadanie generowania
   // raportu jest juz wyslane niezaleznie od stanu dialogu - nowy wiersz w tabeli
@@ -153,7 +153,7 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     try {
       [download] = await Promise.all([
         page.waitForEvent('download', { timeout: 8000 }),
-        downloadButton.click(),
+        humanClick(downloadButton),
       ]);
     } catch {
       await page.waitForTimeout(4000);

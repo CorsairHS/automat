@@ -57,7 +57,7 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
   // biezacy"/"poprzedni" w wiekszosci przypadkow, moze zawiesc przy zakresie niestandardowym
   // z innego miesiaca lub w pierwszych dniach miesiaca).
   const dateRangeInput = page.locator('input[placeholder="d MMM - d MMM"]');
-  await dateRangeInput.click();
+  await humanClick(dateRangeInput);
   await humanDelay(300, 700);
   await selectReactDatepickerDay(page, from);
   await humanDelay(300, 600);
@@ -65,7 +65,7 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
   await humanDelay(400, 800);
 
   log('Otwieram menu pobierania i wybieram "Zarobki na kierowce" (CSV)...');
-  await page.getByRole('button', { name: /^pobierz$|^download$/i }).click();
+  await humanClick(page.getByRole('button', { name: /^pobierz$|^download$/i }));
   await humanDelay(400, 900);
 
   const [download] = await Promise.all([
@@ -75,7 +75,7 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
     // "Zarobki na kierowce", ten tekst nie koliduje z niczym innym na stronie (m.in. z
     // naglowkiem <h1> strony, ktory ma identyczna tresc). TODO: angielski tekst opisu
     // nie zostal jeszcze zaobserwowany na zywo.
-    page.getByText(/eksport csv danych finansowych kierowcy/i).click(),
+    humanClick(page.getByText(/eksport csv danych finansowych kierowcy/i)),
   ]);
 
   const filePath = path.join(downloadDir, download.suggestedFilename());
@@ -89,11 +89,12 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
 /** Klika komorke dnia w otwartym kalendarzu react-datepicker (zaklada, ze miesiac juz jest widoczny). */
 async function selectReactDatepickerDay(page, isoDate) {
   const day = new Date(`${isoDate}T00:00:00Z`).getUTCDate();
-  await page
-    .locator('.react-datepicker__day:not(.react-datepicker__day--outside-month)')
-    .filter({ hasText: new RegExp(`^${day}$`) })
-    .first()
-    .click();
+  await humanClick(
+    page
+      .locator('.react-datepicker__day:not(.react-datepicker__day--outside-month)')
+      .filter({ hasText: new RegExp(`^${day}$`) })
+      .first()
+  );
 }
 
 module.exports = { syncBoltAccount };

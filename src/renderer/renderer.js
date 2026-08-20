@@ -163,7 +163,7 @@ async function renderChecklistSection() {
 /**
  * Uruchamia pobieranie po kolei (sekwencyjnie, nie rownolegle) dla wszystkich
  * skonfigurowanych kont Uber/Bolt/FreeNow. Sekwencyjnie, bo kazde pobranie otwiera
- * widoczne okno przegladarki (Playwright) - rownolegle uruchomienia mylylyby uzytkownika
+ * widoczne okno przegladarki (Playwright) - rownolegle uruchomienia mylilyby uzytkownika
  * i utrudnialy reczne dokonczenie 2FA. Blokuje wszystkie przyciski "Pobierz teraz" i
  * "Pobierz wszystkie" na czas trwania, zeby nie odpalic tego samego konta dwa razy naraz.
  */
