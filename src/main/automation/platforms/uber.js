@@ -30,11 +30,14 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   if (!(await isLoggedIn())) {
     log('Loguje sie do Ubera (krok 1/2: email)...');
     await humanFill(page.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS'), account.fields.email);
-    await humanClick(page.getByRole('button', { name: /^continue$|^dalej$/i }));
+    // Tekst przycisku bywa w dowolnym jezyku UI (obserwowane PL/EN/RU), wiec dopasowanie
+    // po nazwie jest zawodne - #PHONE_NUMBER_or_EMAIL_ADDRESS i #PASSWORD sa w formularzu
+    // typu <form>, ktory ma dokladnie jeden button[type="submit"] na krok.
+    await humanClick(page.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS').locator('xpath=ancestor::form').locator('button[type="submit"]'));
 
     log('Loguje sie do Ubera (krok 2/2: haslo)...');
     await humanFill(page.locator('#PASSWORD'), account.fields.password);
-    await humanClick(page.getByRole('button', { name: /^next$|^dalej$/i }));
+    await humanClick(page.locator('#PASSWORD').locator('xpath=ancestor::form').locator('button[type="submit"]'));
 
     const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });
     if (!loggedIn) {
@@ -43,15 +46,37 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   }
 
   const { from, to } = computePeriodRange(account);
-  log(`Generuje raport "Payments Driver" za okres ${from} - ${to}...`);
+
+  // Nazwa pliku/wiersza wygenerowanego raportu ma stabilny, jezykowo-niezalezny prefiks
+  // "RRRRMMDD-RRRRMMDD-payments_driver..." (zweryfikowane na pobranych plikach, np.
+  // "20260817-20260821-payments_driver-UNITY_DRIVE..."). Przed generowaniem nowego
+  // raportu sprawdzamy, czy taki juz istnieje na liscie - klient zglosil, ze kazde
+  // uruchomienie automatu tworzylo nowy raport nawet dla juz pobranego okresu, zasmiecajac
+  // liste "Reports" duplikatami. Jesli pasujacy wiersz juz istnieje, pobieramy go zamiast
+  // generowac kolejny.
+  const reportNamePrefix = `${from.replace(/-/g, '')}-${to.replace(/-/g, '')}-payments_driver`;
 
   // Zweryfikowane na zywym DOM (2026-08-18): zakladka "Reports" (data-testid stabilne
   // niezaleznie od jezyka), przycisk "Generate Report" (data-tracking-name stabilne)
   // otwiera panel z polami Report type / Start Date / End Date / Select organizations.
+  log(`Sprawdzam, czy raport "Payments Driver" za okres ${from} - ${to} juz istnieje...`);
   await humanClick(page.locator('[data-testid="header-nav-/reports"]'));
   await humanDelay(400, 900);
-  await humanClick(page.locator('[data-tracking-name="report-generation-initiated"]'));
-  await humanDelay(400, 900);
+  // Tabela raportow doladowuje sie asynchronicznie po przelaczeniu zakladki - bez
+  // odczekania na pierwszy wiersz danych sprawdzenie ponizej odpalalo sie za wczesnie i
+  // zawsze wychodzilo "brak", nawet gdy pasujacy raport byl juz na liscie (zaobserwowane
+  // na zywo 2026-08-21: automat i tak generowal duplikat mimo istniejacego raportu).
+  await page.getByRole('row').nth(1).waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+
+  const existingReportRow = page.getByRole('row').filter({ hasText: new RegExp(reportNamePrefix, 'i') }).first();
+  const reportAlreadyExists = (await existingReportRow.count()) > 0;
+
+  if (reportAlreadyExists) {
+    log('Raport za ten okres juz istnieje - pobieram istniejacy zamiast generowac nowy.');
+  } else {
+    log(`Generuje raport "Payments Driver" za okres ${from} - ${to}...`);
+    await humanClick(page.locator('[data-tracking-name="report-generation-initiated"]'));
+    await humanDelay(400, 900);
 
   // Domyslny "Report type" to "Driver Activity"/"Czas i odleglosc kierowcy" - trzeba
   // przelaczyc na "Payments Driver". Jezyk UI jest nieprzewidywalny (widziany polski i
@@ -114,38 +139,63 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // Pole organizacji jest readonly (klikniecie otwiera liste, nie da sie wpisac tekstu).
   // Zweryfikowany na zywo polski placeholder "Wybierz organizacje, ktore chcesz
   // uwzglednic w raporcie" - dopasowujemy go obok angielskiego oryginalu. Lista opcji
-  // to (w odroznieniu od "Report type") checkboxy z etykieta (label > span + input +
-  // tekst) - prawdziwy <input type="checkbox"> jest wizualnie ukryty (stylowany przez
-  // sasiedni span), Playwright odmawia klikniecia w niewidoczny element, wiec klikamy
-  // zamiast tego otaczajacy <label> (rodzic inputu), co dziala jak natywne toggle.
-  if (account.company) {
-    await humanClick(page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i));
-    await humanDelay(300, 700);
-    const orgCheckbox = page.getByRole('checkbox', { name: new RegExp(account.company, 'i') });
-    await humanClick(orgCheckbox.locator('xpath=..'));
-    await humanDelay(300, 600);
-    await page.keyboard.press('Escape');
-    await humanDelay(300, 600);
+  // to (w odroznieniu od "Report type") checkboxy z etykieta: <label data-baseweb="checkbox">
+  // zawierajacy span (wizualny checkbox) + prawdziwy <input type="checkbox"> (wizualnie
+  // ukryty przez CSS - stylowany przez sasiedni span) + tekst. Operujemy na <label>, bo
+  // to on jest faktycznie widoczny i klikalny - czekanie na widocznosc ukrytego <input>
+  // (np. przez getByRole('checkbox').waitFor(visible)) wisi w nieskonczonosc, bo input
+  // NIGDY nie staje sie "visible" w rozumieniu Playwrighta.
+  // Uber wymaga zaznaczenia co najmniej jednej organizacji (walidacja "Wybierz co
+  // najmniej jedna organizacje"), wiec ten krok wykonujemy zawsze, niezaleznie od tego,
+  // czy w konfiguracji konta wpisano pole "Firma". Poleganie na dopasowaniu tekstu
+  // account.company do etykiety checkboxa okazalo sie zawodne u klienta (pole "Firma" to
+  // wolny tekst wpisywany recznie, nie musi byc podciagiem pelnej nazwy prawnej widocznej
+  // w Uberze) - kiedy lista ma dokladnie jedna organizacje (typowy przypadek), zaznaczamy
+  // ja bezposrednio bez zadnego dopasowania tekstu. Dopiero przy wielu organizacjach
+  // uzywamy account.company do wyboru wlasciwej.
+  await humanClick(page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i));
+  await humanDelay(300, 700);
+  const orgLabels = page.locator('label[data-baseweb="checkbox"]');
+  await orgLabels.first().waitFor({ state: 'visible' });
+  const orgCount = await orgLabels.count();
+  let orgLabel;
+  if (orgCount === 1) {
+    orgLabel = orgLabels.first();
+  } else if (account.company) {
+    orgLabel = orgLabels.filter({ hasText: new RegExp(account.company, 'i') });
+    if ((await orgLabel.count()) === 0) {
+      throw new Error(`Nie znaleziono organizacji pasujacej do pola "Firma" ("${account.company}") wsrod ${orgCount} dostepnych w Uberze. Sprawdz, czy pole "Firma" w konfiguracji konta odpowiada dokladnej nazwie organizacji widocznej na liscie w Uberze.`);
+    }
+  } else {
+    throw new Error(`Konto ma ${orgCount} organizacje w Uberze - uzupelnij pole "Firma" w konfiguracji konta, zeby wskazac, ktora z nich uwzglednic w raporcie.`);
   }
+  await humanClick(orgLabel);
+  await humanDelay(300, 600);
+  await page.keyboard.press('Escape');
+  await humanDelay(300, 600);
 
   await humanDelay(300, 700);
-  await humanClick(page.getByRole('button', { name: /^generate$|^wygeneruj$/i }));
-  // Dialog "Wygeneruj raport" NIE zamyka sie sam po kliknieciu - zaslania tabele i
-  // blokuje kliknieca w przycisk pobierania ponizej. Zamykamy go (zadanie generowania
-  // raportu jest juz wyslane niezaleznie od stanu dialogu - nowy wiersz w tabeli
-  // pojawia sie ze statusem "W toku" natychmiast).
-  await page.keyboard.press('Escape');
+    await humanClick(page.getByRole('button', { name: /^generate$|^wygeneruj$/i }));
+    // Dialog "Wygeneruj raport" NIE zamyka sie sam po kliknieciu - zaslania tabele i
+    // blokuje kliknieca w przycisk pobierania ponizej. Zamykamy go (zadanie generowania
+    // raportu jest juz wyslane niezaleznie od stanu dialogu - nowy wiersz w tabeli
+    // pojawia sie ze statusem "W toku" natychmiast).
+    await page.keyboard.press('Escape');
+  }
 
-  // Generowanie raportu trwa chwile (async). Zamiast dopasowywac wiersz po tekscie daty
-  // (jezyk tabeli jest nieprzewidywalny, jak wszystko inne w tym UI), bierzemy pierwszy
-  // wiersz danych (nth(0) to naglowek tabeli) - najnowszy wygenerowany raport pojawia sie
-  // zawsze na gorze listy (zweryfikowane na zrzutach ekranu historii raportow).
+  // Gdy raport juz istnial, bierzemy pasujacy wiersz znaleziony wyzej. Przy swiezo
+  // wygenerowanym raporcie (async) zamiast dopasowywac wiersz po tekscie daty (jezyk
+  // tabeli jest nieprzewidywalny, jak wszystko inne w tym UI), bierzemy pierwszy wiersz
+  // danych (nth(0) to naglowek tabeli) - najnowszy wygenerowany raport pojawia sie zawsze
+  // na gorze listy (zweryfikowane na zrzutach ekranu historii raportow).
   // Zweryfikowane na zywo: przycisk pobierania jest obecny w DOM (ten sam data-testid)
   // JUZ w trakcie generowania (status "W toku"), wiec samo czekanie na jego widocznosc
   // nie wystarcza - klikniecie w tym stanie po prostu nic nie robi. Zamiast zgadywac po
   // czym rozpoznac gotowosc, probujemy pobrania cyklicznie az faktycznie wystartuje.
-  log('Czekam na wygenerowanie raportu (moze to potrwac do kilku minut)...');
-  const reportRow = page.getByRole('row').nth(1);
+  const reportRow = reportAlreadyExists ? existingReportRow : page.getByRole('row').nth(1);
+  if (!reportAlreadyExists) {
+    log('Czekam na wygenerowanie raportu (moze to potrwac do kilku minut)...');
+  }
   const downloadButton = reportRow.getByRole('button', { name: /download|pobierz/i });
   const overallDeadline = Date.now() + 5 * 60 * 1000;
   let download = null;
