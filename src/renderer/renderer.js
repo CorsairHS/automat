@@ -18,6 +18,7 @@ let CONFIG = null;
 const statusElements = new Map();
 const runButtons = new Map();
 let uploadStatusElement = null;
+let deleteStatusElement = null;
 let reportAccountsCache = [];
 let downloadAllButton = null;
 let downloadAllStatusElement = null;
@@ -29,6 +30,10 @@ window.api.onSyncStatus(({ platformId, accountId, message }) => {
 
 window.api.onUploadStatus(({ message }) => {
   if (uploadStatusElement) uploadStatusElement.textContent = message;
+});
+
+window.api.onDeleteStatus(({ message }) => {
+  if (deleteStatusElement) deleteStatusElement.textContent = message;
 });
 
 async function render() {
@@ -56,6 +61,7 @@ async function render() {
 
   await renderChecklistSection();
   renderUploadSection();
+  renderDeleteSection();
 }
 
 /**
@@ -239,6 +245,64 @@ function renderUploadSection() {
     const result = await window.api.runUpload();
     runBtn.disabled = false;
     statusSpan.textContent = result.ok ? `Gotowe: wgrano ${result.count} plik(ow).` : `Blad: ${result.error}`;
+  };
+
+  runRow.appendChild(runBtn);
+  runRow.appendChild(statusSpan);
+  section.appendChild(runRow);
+
+  document.getElementById('platform-list').appendChild(section);
+}
+
+/**
+ * Usuwanie raportow z PartnerTax admin - ta sama sciezka co wgrywanie (admin -> settlements
+ * -> pierwsze niezakonczone rozliczenie), tylko zamiast dodawac Data source, zaznacza
+ * checkbox DELETE na istniejacym wierszu i zapisuje. Usuwa TYLKO Uber/Bolt/FreeNow (nic
+ * innego), po jednym rekordzie na raz - kazdy system to osobny przejazd sciezki, bo
+ * formularz przeladowuje sie po kazdym zapisie. Przycisk jest globalny (nie per-konto),
+ * jak przy wgrywaniu.
+ */
+function renderDeleteSection() {
+  const existing = document.getElementById('delete-section');
+  if (existing) existing.remove();
+
+  const section = document.createElement('section');
+  section.id = 'delete-section';
+  section.className = 'platform-section';
+
+  const header = document.createElement('h2');
+  header.textContent = 'PartnerTax Admin - usuwanie raportow';
+  section.appendChild(header);
+
+  const note = document.createElement('p');
+  note.className = 'platform-note';
+  note.textContent = 'Usuwa z pierwszego niezakonczonego rozliczenia (Finished = False) po jednym raporcie Uber/Bolt/FreeNow - nic innego. Kazdy system to osobne zaznaczenie DELETE i zapis ("Save and continue editing").';
+  section.appendChild(note);
+
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+
+  const runBtn = document.createElement('button');
+  runBtn.className = 'btn-delete';
+  runBtn.textContent = 'Usun raporty';
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+  deleteStatusElement = statusSpan;
+
+  runBtn.onclick = async () => {
+    runBtn.disabled = true;
+    statusSpan.textContent = 'Uruchamiam przegladarke...';
+    const result = await window.api.runDeleteReports();
+    runBtn.disabled = false;
+    if (!result.ok) {
+      statusSpan.textContent = `Blad: ${result.error}`;
+    } else {
+      const diagText = result.diagnostics && result.diagnostics.length > 0
+        ? ` | ${result.diagnostics.join(' ; ')}`
+        : '';
+      statusSpan.textContent = `Gotowe: usunieto ${result.count} raport(ow).${diagText}`;
+    }
   };
 
   runRow.appendChild(runBtn);

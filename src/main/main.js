@@ -2,10 +2,10 @@ const path = require('path');
 const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
 const credentialStore = require('./credentialStore');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
-const { runDownload, runUpload } = require('./automation/runner');
+const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
 
 let mainWindow;
-
+//commit
 // Ostatni udany download per (platformId, accountId) - zrodlo dla uploadu do
 // PartnerTax admin. Tylko w pamieci procesu (nie trzeba trwalosci miedzy uruchomieniami
 // aplikacji - upload robi sie zaraz po pobraniu).
@@ -123,7 +123,32 @@ ipcMain.handle('upload:run', async (event) => {
 
   try {
     await runUpload(app.getPath('userData'), partnertaxAccount, uploads, { statusCallback });
+    lastDownloads.clear();
     return { ok: true, count: uploads.length };
+  } catch (error) {
+    // Pliki, ktore zdazyly sie wgrac przed bledem, sa juz trwale zapisane w PartnerTax -
+    // wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich drugi raz
+    // (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
+    for (const upload of error.succeededUploads || []) {
+      lastDownloads.delete(`${upload.platformId}:${upload.accountId}`);
+    }
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('reports:delete', async (event) => {
+  const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
+  if (!partnertaxAccount) {
+    return { ok: false, error: 'Brak skonfigurowanego konta PartnerTax admin.' };
+  }
+
+  const statusCallback = (message) => {
+    event.sender.send('delete:status', { message });
+  };
+
+  try {
+    const result = await runDeleteReports(app.getPath('userData'), partnertaxAccount, { statusCallback });
+    return { ok: true, count: result.deletedCount, diagnostics: result.diagnostics };
   } catch (error) {
     return { ok: false, error: error.message };
   }

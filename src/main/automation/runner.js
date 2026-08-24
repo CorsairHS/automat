@@ -4,7 +4,7 @@ const { launchPlatformContext } = require('./browserSession');
 const { syncUberAccount } = require('./platforms/uber');
 const { syncBoltAccount } = require('./platforms/bolt');
 const { syncFreenowAccount } = require('./platforms/freenow');
-const { uploadToPartnerTax } = require('./platforms/partnertax');
+const { uploadToPartnerTax, deleteReportsFromPartnerTax } = require('./platforms/partnertax');
 
 const SYNC_FUNCTIONS = {
   uber: syncUberAccount,
@@ -30,7 +30,7 @@ async function runDownload(userDataRoot, platformId, account, { statusCallback }
   const downloadDir = path.join(userDataRoot, 'downloads', platformId, sanitizeFolderName(account.label || account.accountId));
   fs.mkdirSync(downloadDir, { recursive: true });
 
-  const context = await launchPlatformContext(userDataRoot, platformId, account.accountId);
+  const context = await launchPlatformContext(userDataRoot, platformId, account.accountId, { statusCallback });
   try {
     return await syncFn({ context, account, downloadDir, statusCallback });
   } finally {
@@ -44,7 +44,7 @@ async function runDownload(userDataRoot, platformId, account, { statusCallback }
  * uploads: [{ platformId, city, filePath }]
  */
 async function runUpload(userDataRoot, account, uploads, { statusCallback } = {}) {
-  const context = await launchPlatformContext(userDataRoot, 'partnertax', account.accountId);
+  const context = await launchPlatformContext(userDataRoot, 'partnertax', account.accountId, { statusCallback });
   try {
     await uploadToPartnerTax({ context, account, uploads, statusCallback });
   } finally {
@@ -52,4 +52,18 @@ async function runUpload(userDataRoot, account, uploads, { statusCallback } = {}
   }
 }
 
-module.exports = { runDownload, runUpload };
+/**
+ * Usuwa po jednym Data source dla Uber/Bolt/FreeNow z pierwszego niezakonczonego
+ * rozliczenia w PartnerTax admin (patrz deleteReportsFromPartnerTax) - na tym samym,
+ * wspolnym koncie PartnerTax co runUpload.
+ */
+async function runDeleteReports(userDataRoot, account, { statusCallback } = {}) {
+  const context = await launchPlatformContext(userDataRoot, 'partnertax', account.accountId, { statusCallback });
+  try {
+    return await deleteReportsFromPartnerTax({ context, account, statusCallback });
+  } finally {
+    await context.close();
+  }
+}
+
+module.exports = { runDownload, runUpload, runDeleteReports };

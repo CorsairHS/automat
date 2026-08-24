@@ -23,4 +23,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('upload:status', listener);
     return () => ipcRenderer.removeListener('upload:status', listener);
   },
+  runDeleteReports: () => ipcRenderer.invoke('reports:delete'),
+  onDeleteStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('delete:status', listener);
+    return () => ipcRenderer.removeListener('delete:status', listener);
+  },
 });
