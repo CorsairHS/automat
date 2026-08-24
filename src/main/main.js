@@ -5,7 +5,7 @@ const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
 
 let mainWindow;
-
+//commit
 // Ostatni udany download per (platformId, accountId) - zrodlo dla uploadu do
 // PartnerTax admin. Tylko w pamieci procesu (nie trzeba trwalosci miedzy uruchomieniami
 // aplikacji - upload robi sie zaraz po pobraniu).
