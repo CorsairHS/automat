@@ -23,6 +23,7 @@ const SYSTEM_OPTION_VALUES = {
   bolt: '17',
   uber: '32',
   freenow: '2',
+  boltfood: '78',
 };
 
 // Przy usuwaniu trzeba dopasowac tez warianty/duplikaty tego samego systemu (patrz
@@ -34,6 +35,7 @@ const SYSTEM_OPTION_ALIASES = {
   bolt: ['17', '65'],
   uber: ['32'],
   freenow: ['2'],
+  boltfood: ['78'],
 };
 
 // Wartosci <option value="..."> pola "City" (zweryfikowane na zrzucie ekranu DOM,

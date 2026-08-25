@@ -4,12 +4,14 @@ const { launchPlatformContext } = require('./browserSession');
 const { syncUberAccount } = require('./platforms/uber');
 const { syncBoltAccount } = require('./platforms/bolt');
 const { syncFreenowAccount } = require('./platforms/freenow');
+const { syncBoltFoodAccount } = require('./platforms/boltfood');
 const { uploadToPartnerTax, deleteReportsFromPartnerTax } = require('./platforms/partnertax');
 
 const SYNC_FUNCTIONS = {
   uber: syncUberAccount,
   bolt: syncBoltAccount,
   freenow: syncFreenowAccount,
+  boltfood: syncBoltFoodAccount,
 };
 
 function sanitizeFolderName(name) {

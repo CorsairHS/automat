@@ -95,14 +95,25 @@ async function syncFreenowAccount({ context, account, downloadDir, statusCallbac
   // FreeNow pobiera archiwum ZIP zawierajace kilka wariantow CSV (m.in. z i bez VAT) -
   // rozpakowujemy i wybieramy plik z wariantem WITH VAT (zweryfikowane na zywo, 2026-08-18:
   // nazwa pliku zawiera "with_VAT", np. "earnings_2026-08-17_2026-08-18_with_VAT.csv").
-  await extractZip(zipPath, { dir: downloadDir });
-  const extractedFiles = fs.readdirSync(downloadDir).filter((name) => name !== path.basename(zipPath));
+  // KRYTYCZNE: downloadDir jest trwaly per-konto (patrz runner.js) - kazde kolejne
+  // uruchomienie dopisuje do niego pliki, wiec rozpakowywanie bezposrednio do niego i
+  // szukanie "jakiegos" pliku z "with_vat" w calym katalogu zbierало tez pliki z
+  // POPRZEDNICH uruchomien. fs.readdirSync nie gwarantuje kolejnosci wg daty, wiec
+  // .find() potrafil zwrocic stary plik z wczesniejszego okresu zamiast swiezo
+  // rozpakowanego (zaobserwowane na zywo 2026-08-25: automat wybral okres 24-25 sierpnia,
+  // ale zwrocil plik "earnings_2026-08-17_2026-08-18..." z wczesniejszego testu).
+  // Rozpakowujemy wiec do dedykowanego, unikalnego podkatalogu per-uruchomienie, zeby
+  // stare pliki nie mogly wplynac na wybor.
+  const extractDir = path.join(downloadDir, path.basename(zipPath, path.extname(zipPath)));
+  fs.mkdirSync(extractDir, { recursive: true });
+  await extractZip(zipPath, { dir: extractDir });
+  const extractedFiles = fs.readdirSync(extractDir);
   const withVatFile = extractedFiles.find((name) => /with[_\s-]?vat/i.test(name));
   if (!withVatFile) {
     throw new Error(`Nie znaleziono pliku wariantu WITH VAT w rozpakowanym archiwum FreeNow (znalezione pliki: ${extractedFiles.join(', ') || 'brak'}).`);
   }
 
-  const filePath = path.join(downloadDir, withVatFile);
+  const filePath = path.join(extractDir, withVatFile);
   log(`Wyodrebniono plik WITH VAT: ${filePath}`);
 
   await page.close();

@@ -51,6 +51,19 @@ const PLATFORMS = [
     defaultPeriodMode: 'current_week'
   },
   {
+    id: 'boltfood',
+    label: 'Bolt Food',
+    fields: ['email', 'password', 'orgId'],
+    sensitiveFields: ['password'],
+    multiAccount: true,
+    loginUrl: 'https://dcfo.bolt.eu/fleet/{orgId}/reports',
+    report: {
+      name: 'Fleet Courier Earnings and Balances (CSV)',
+      menuPath: 'Raportowanie > Wygenerowane raporty > najnowszy "Fleet Courier Earnings and Balances"',
+    },
+    defaultPeriodMode: 'current_week'
+  },
+  {
     id: 'partnertax',
     label: 'PartnerTax Admin',
     fields: ['username', 'password'],

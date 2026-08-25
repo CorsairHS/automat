@@ -15,6 +15,13 @@ async function waitForAuthStateToSettle(page, { isLoggedIn, isLoginFormVisible, 
   }
 }
 
+// Prefiks rozpoznawany przez renderer (patrz renderer.js) do wizualnego oznaczenia
+// jedynego momentu, w ktorym reczna interwencja partnera w oknie przegladarki jest
+// bezpieczna. W kazdym innym momencie automat steruje ta sama strona - klikanie w
+// tle koliduje z jego wlasnymi klikniechiami/lokatorami, wiec poza tym oknem partner
+// nie powinien dotykac przegladarki.
+const SAFE_TO_HELP_MARKER = '[MOZESZ POMOC]';
+
 /**
  * Czeka az `isLoggedIn(page)` zwroci true. Uzywane po wyslaniu formularza logowania -
  * jesli platforma wymaga 2FA, okno przegladarki jest widoczne (headless:false) i partner
@@ -28,7 +35,7 @@ async function waitForLoginCompletion(page, { isLoggedIn, statusCallback, timeou
     if (await isLoggedIn(page)) return true;
 
     if (!notifiedWaiting && Date.now() - start > 5000) {
-      statusCallback?.('Oczekiwanie na dokonczenie logowania (mozliwe 2FA) - uzupelnij dane w otwartym oknie przegladarki...');
+      statusCallback?.(`${SAFE_TO_HELP_MARKER} Mozliwe 2FA - jesli platforma prosi o kod, wpisz go recznie w otwartym oknie przegladarki. Automat czeka i sam wykryje zakonczenie logowania. (W pozostalych krokach nie klikaj w oknie przegladarki - moze to kolidowac z automatem.)`);
       notifiedWaiting = true;
     }
 
@@ -38,4 +45,4 @@ async function waitForLoginCompletion(page, { isLoggedIn, statusCallback, timeou
   return false;
 }
 
-module.exports = { waitForAuthStateToSettle, waitForLoginCompletion };
+module.exports = { waitForAuthStateToSettle, waitForLoginCompletion, SAFE_TO_HELP_MARKER };

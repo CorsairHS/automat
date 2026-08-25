@@ -4,6 +4,7 @@ const FIELD_LABELS = {
   password: 'Haslo',
   clientId: 'Client ID',
   clientSecret: 'Client Secret',
+  orgId: 'ID organizacji (z URL panelu, np. /fleet/<ORG_ID>/...)',
 };
 
 const FIELD_TYPES = {
@@ -12,6 +13,7 @@ const FIELD_TYPES = {
   password: 'password',
   clientId: 'text',
   clientSecret: 'password',
+  orgId: 'text',
 };
 
 let CONFIG = null;
@@ -23,17 +25,30 @@ let reportAccountsCache = [];
 let downloadAllButton = null;
 let downloadAllStatusElement = null;
 
+// Znacznik uzywany przez glowny proces (patrz loginHelpers.js) do oznaczenia
+// jedynego momentu, w ktorym partner moze bezpiecznie recznie kliknac w oknie
+// przegladarki (uzupelnienie kodu 2FA) - poza tym momentem automat steruje ta sama
+// strona i reczne klikanie moze z nim kolidowac.
+const SAFE_TO_HELP_MARKER = '[MOŻESZ POMOC]';
+
+function applyStatusMessage(el, message) {
+  if (!el) return;
+  const isSafeToHelp = message.startsWith(SAFE_TO_HELP_MARKER);
+  el.textContent = isSafeToHelp ? message.slice(SAFE_TO_HELP_MARKER.length).trim() : message;
+  el.classList.toggle('run-status--safe-to-help', isSafeToHelp);
+}
+
 window.api.onSyncStatus(({ platformId, accountId, message }) => {
   const el = statusElements.get(`${platformId}:${accountId}`);
-  if (el) el.textContent = message;
+  applyStatusMessage(el, message);
 });
 
 window.api.onUploadStatus(({ message }) => {
-  if (uploadStatusElement) uploadStatusElement.textContent = message;
+  applyStatusMessage(uploadStatusElement, message);
 });
 
 window.api.onDeleteStatus(({ message }) => {
-  if (deleteStatusElement) deleteStatusElement.textContent = message;
+  applyStatusMessage(deleteStatusElement, message);
 });
 
 async function render() {
@@ -366,11 +381,11 @@ function renderAccountCard(platform, account) {
   const labelRow = document.createElement('div');
   labelRow.className = 'field-row';
   const labelLabel = document.createElement('label');
-  labelLabel.textContent = 'Nazwa / etykieta (np. Unity Drive)';
+  labelLabel.textContent = 'Nazwa / etykieta ';
   labelRow.appendChild(labelLabel);
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
-  labelInput.placeholder = 'np. Unity Drive - Wroclaw';
+  labelInput.placeholder = 'np. <Name> - <City>';
   labelInput.value = account ? account.label || '' : '';
   labelRow.appendChild(labelInput);
   inputs.label = labelInput;
@@ -420,7 +435,7 @@ function renderAccountCard(platform, account) {
     companyRow.appendChild(companyLabel);
     const companyInput = document.createElement('input');
     companyInput.type = 'text';
-    companyInput.placeholder = 'np. Unity Drive';
+    companyInput.placeholder = 'np. <Name>';
     companyInput.value = account ? account.company || '' : '';
     companyRow.appendChild(companyInput);
     inputs.company = companyInput;
