@@ -4,7 +4,7 @@ const FIELD_LABELS = {
   password: 'Haslo',
   clientId: 'Client ID',
   clientSecret: 'Client Secret',
-  orgId: 'ID organizacji (z URL panelu, np. /fleet/<ORG_ID>/...)',
+  orgId: 'ID organizacji/firmy (z URL panelu po przelaczeniu firmy, np. /fleet/<ORG_ID>/)',
 };
 
 const FIELD_TYPES = {
@@ -24,6 +24,10 @@ let deleteStatusElement = null;
 let reportAccountsCache = [];
 let downloadAllButton = null;
 let downloadAllStatusElement = null;
+// Zakladka platformy aktywna w widoku kont (Uber/Bolt/FreeNow/BoltFood/PartnerTax) -
+// trzymana poza render(), zeby przetrwac ponowne wywolania render() (np. po Zapisz/Usun/
+// Pobierz teraz) i partner nie wracal za kazdym razem do pierwszej zakladki.
+let activePlatformId = null;
 
 // Znacznik uzywany przez glowny proces (patrz loginHelpers.js) do oznaczenia
 // jedynego momentu, w ktorym partner moze bezpiecznie recznie kliknac w oknie
@@ -53,12 +57,20 @@ window.api.onDeleteStatus(({ message }) => {
 
 async function render() {
   CONFIG = await window.api.getPlatformsConfig();
-  const container = document.getElementById('platform-list');
-  container.innerHTML = '';
 
   reportAccountsCache = [];
   statusElements.clear();
   runButtons.clear();
+
+  // Budujemy WSZYSTKIE sekcje platform (z await na listAccounts) do tablicy PRZED
+  // dotknieciem #platform-list. Wczesniej kod najpierw czyscil kontener
+  // (innerHTML = ''), a dopiero potem odtwarzal sekcje jedna po drugiej - w tej
+  // przerwie strona byla chwilowo pusta, wiec przegladarka zerowala scroll (bo nie mial
+  // juz czego przewijac) i nie wracal on na miejsce po odtworzeniu tresci (zgloszone
+  // przez klienta jako "jak dodaje nowe konto to przewija na sama gore"). Podmiana
+  // calego kontenera w jednym, synchronicznym kroku (bez await pomiedzy czyszczeniem a
+  // wypelnieniem) eliminuje ta przerwe.
+  const platformSections = [];
   for (const platform of CONFIG.platforms) {
     const accounts = await window.api.listAccounts(platform.id);
     if (platform.report) {
@@ -71,12 +83,57 @@ async function render() {
         });
       }
     }
-    container.appendChild(await renderPlatformSection(platform, accounts));
+    platformSections.push({ platform, section: await renderPlatformSection(platform, accounts) });
+  }
+
+  if (!activePlatformId || !CONFIG.platforms.some((p) => p.id === activePlatformId)) {
+    activePlatformId = CONFIG.platforms[0]?.id || null;
+  }
+
+  const container = document.getElementById('platform-list');
+  container.innerHTML = '';
+  container.appendChild(renderPlatformTabs(CONFIG.platforms));
+  for (const { platform, section } of platformSections) {
+    section.dataset.platformId = platform.id;
+    section.style.display = platform.id === activePlatformId ? '' : 'none';
+    container.appendChild(section);
   }
 
   await renderChecklistSection();
   renderUploadSection();
   renderDeleteSection();
+  renderSessionTransferSection();
+}
+
+/**
+ * Pasek zakladek jedna na platforme (Uber/Bolt/FreeNow/BoltFood/PartnerTax) nad lista
+ * kont - przelaczanie to czyste pokazywanie/ukrywanie juz zbudowanych sekcji (display),
+ * bez ponownego pobierania danych czy wywolywania render() - natychmiastowe, bez
+ * przeladowania czy skoku scrolla. Sekcje globalne (Kontrola pobran, wgrywanie/usuwanie
+ * w PartnerTax) NIE naleza do zadnej zakladki - zostaja zawsze widoczne ponizej.
+ */
+function renderPlatformTabs(platforms) {
+  const tabBar = document.createElement('div');
+  tabBar.className = 'platform-tabs';
+
+  for (const platform of platforms) {
+    const tabBtn = document.createElement('button');
+    tabBtn.type = 'button';
+    tabBtn.className = 'platform-tab' + (platform.id === activePlatformId ? ' active' : '');
+    tabBtn.textContent = platform.label;
+    tabBtn.onclick = () => {
+      activePlatformId = platform.id;
+      for (const btn of tabBar.querySelectorAll('.platform-tab')) {
+        btn.classList.toggle('active', btn === tabBtn);
+      }
+      for (const sectionEl of document.querySelectorAll('#platform-list [data-platform-id]')) {
+        sectionEl.style.display = sectionEl.dataset.platformId === platform.id ? '' : 'none';
+      }
+    };
+    tabBar.appendChild(tabBtn);
+  }
+
+  return tabBar;
 }
 
 /**
@@ -327,6 +384,91 @@ function renderDeleteSection() {
   document.getElementById('platform-list').appendChild(section);
 }
 
+/**
+ * Jeden globalny eksport/import sesji logowania (cookies) dla wszystkich skonfigurowanych
+ * kont naraz (Uber/Bolt/FreeNow/BoltFood), zamiast osobnych przyciskow przy kazdym koncie -
+ * pozwala po jednorazowym zalogowaniu (przejsciu 2FA) na jednym komputerze przeniesc
+ * wszystkie sesje jednym plikiem na inny komputer/system. Dopasowanie przy imporcie idzie
+ * po platformId+etykiecie konta (nie po accountId), bo accountId to lokalny UUID, ktory
+ * rozjezdza sie miedzy komputerami nawet dla "tego samego" konta.
+ */
+function renderSessionTransferSection() {
+  const existing = document.getElementById('session-transfer-section');
+  if (existing) existing.remove();
+
+  const section = document.createElement('section');
+  section.id = 'session-transfer-section';
+  section.className = 'platform-section';
+
+  const header = document.createElement('h2');
+  header.textContent = 'Przenoszenie kont i sesji logowania';
+  section.appendChild(header);
+
+  const note = document.createElement('p');
+  note.className = 'platform-note';
+  note.textContent = 'Zapisuje/wczytuje jednym plikiem PELNA konfiguracje wszystkich kont (Uber/Bolt/FreeNow/Bolt Food: etykieta, login, haslo, orgId, miasto/firma, okres) razem z zalogowanymi sesjami, zeby po przejsciu 2FA raz na jednym komputerze nie trzeba bylo tego powtarzac na kolejnych - import sam zaklada brakujace konta. UWAGA: plik zawiera hasla w jawnym tekscie - traktuj go jak zbior hasel, nie wysylaj otwartym tekstem (mail/czat).';
+  section.appendChild(note);
+
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'btn-secondary';
+  exportBtn.textContent = 'Eksportuj wszystkie sesje';
+
+  const importBtn = document.createElement('button');
+  importBtn.className = 'btn-secondary';
+  importBtn.textContent = 'Importuj wszystkie sesje';
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+
+  exportBtn.onclick = async () => {
+    exportBtn.disabled = true;
+    statusSpan.textContent = 'Eksportuje sesje...';
+    const result = await window.api.exportAllSessions();
+    exportBtn.disabled = false;
+    if (result.canceled) {
+      statusSpan.textContent = '';
+    } else {
+      statusSpan.textContent = result.ok
+        ? `Zapisano ${result.count} sesje(i) do: ${result.filePath}`
+        : `Blad: ${result.error}`;
+    }
+  };
+
+  importBtn.onclick = async () => {
+    importBtn.disabled = true;
+    statusSpan.textContent = 'Importuje sesje...';
+    const result = await window.api.importAllSessions();
+    if (result.canceled) {
+      importBtn.disabled = false;
+      statusSpan.textContent = '';
+      return;
+    }
+    if (!result.ok) {
+      importBtn.disabled = false;
+      statusSpan.textContent = `Blad: ${result.error}`;
+      return;
+    }
+    // render() odtwarza ta sekcje od zera (nowe accountId dla nowo utworzonych kont musza
+    // sie pojawic na kartach), wiec komunikat trzeba ustawic na NOWYM elemencie po
+    // przebudowie - `statusSpan` z tego domkniecia jest wtedy juz odlaczony od DOM.
+    await render();
+    const refreshedStatus = document.querySelector('#session-transfer-section .run-status');
+    if (refreshedStatus) {
+      refreshedStatus.textContent = `Zaimportowano/zaktualizowano ${result.imported.length} konto/konta: ${result.imported.join(', ')}`;
+    }
+  };
+
+  runRow.appendChild(exportBtn);
+  runRow.appendChild(importBtn);
+  runRow.appendChild(statusSpan);
+  section.appendChild(runRow);
+
+  document.getElementById('platform-list').appendChild(section);
+}
+
 async function renderPlatformSection(platform, accounts) {
   const section = document.createElement('section');
   section.className = 'platform-section';
@@ -451,10 +593,7 @@ function renderAccountCard(platform, account) {
   const actions = document.createElement('div');
   actions.className = 'card-actions';
 
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'btn-save';
-  saveBtn.textContent = 'Zapisz';
-  saveBtn.onclick = async () => {
+  function collectAccountPayload() {
     const fields = {};
     for (const field of platform.fields) {
       fields[field] = inputs[field].value;
@@ -471,7 +610,14 @@ function renderAccountCard(platform, account) {
       payload.periodFrom = inputs.periodFrom();
       payload.periodTo = inputs.periodTo();
     }
-    await window.api.saveAccount(platform.id, payload);
+    return payload;
+  }
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-save';
+  saveBtn.textContent = 'Zapisz';
+  saveBtn.onclick = async () => {
+    await window.api.saveAccount(platform.id, collectAccountPayload());
     await render();
   };
   actions.appendChild(saveBtn);
@@ -507,7 +653,17 @@ function renderAccountCard(platform, account) {
 
     runBtn.onclick = async () => {
       runBtn.disabled = true;
-      statusSpan.textContent = 'Uruchamiam przegladarke...';
+      statusSpan.textContent = 'Zapisuje ustawienia i uruchamiam przegladarke...';
+      // "Pobierz teraz" uruchamia synchronizacje na podstawie configu zapisanego na
+      // dysku (window.api.runSync przyjmuje tylko accountId - runner.js/credentialStore
+      // odczytuja reszte z pliku), NIE na podstawie tego, co aktualnie widac w
+      // formularzu. Bez zapisania biezacego stanu formularza przed uruchomieniem, zmiana
+      // np. okresu pobierania bez wczesniejszego kliknieca "Zapisz" byla cicho ignorowana
+      // - automat uzywal starego, wczesniej zapisanego okresu (zaobserwowane na zywo
+      // 2026-08-25, konto Warszawa: partner zmienil zakres na 20-25 sierpnia, ale automat
+      // pobral raport za "tydzien biezacy" = 24-25 sierpnia, bo to byl ostatni zapisany
+      // tryb). Zapisujemy wiec biezacy stan formularza tuz przed uruchomieniem.
+      await window.api.saveAccount(platform.id, collectAccountPayload());
       const result = await window.api.runSync(platform.id, account.accountId);
       runBtn.disabled = false;
       statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;

@@ -85,4 +85,36 @@ async function launchPlatformContext(userDataRoot, platformId, accountId, { head
   return context;
 }
 
-module.exports = { launchPlatformContext };
+/**
+ * Odczytuje stan sesji (cookies + localStorage) trwalego profilu danego konta - wolane
+ * per-konto przez main.js przy budowaniu jednego zbiorczego pliku eksportu (patrz
+ * sessions:exportAll), zeby dalo sie przeniesc zalogowanie (2FA raz zrobione) na inny
+ * komputer/system. Uruchamiamy kontekst headless, bo to tylko odczyt stanu, bez potrzeby
+ * pokazywania partnerowi okna przegladarki.
+ */
+async function readSessionState(userDataRoot, platformId, accountId) {
+  const context = await launchPlatformContext(userDataRoot, platformId, accountId, { headless: true });
+  try {
+    return await context.storageState();
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Wstrzykuje wczesniej wyeksportowany stan sesji do (nowego lub istniejacego) trwalego
+ * profilu danego konta. Stan pochodzi ze zbiorczego pliku JSON (sessions:importAll w
+ * main.js), ktory nie jest szyfrowany przez system operacyjny (w przeciwienstwie do
+ * profilu Chromium - patrz komentarz w launchPlatformContext), wiec dziala tez przy
+ * przenoszeniu miedzy Windows i macOS.
+ */
+async function writeSessionState(userDataRoot, platformId, accountId, storageState) {
+  const context = await launchPlatformContext(userDataRoot, platformId, accountId, { headless: true });
+  try {
+    await context.setStorageState(storageState);
+  } finally {
+    await context.close();
+  }
+}
+
+module.exports = { launchPlatformContext, readSessionState, writeSessionState };

@@ -27,10 +27,10 @@ const PLATFORMS = [
   {
     id: 'bolt',
     label: 'Bolt',
-    fields: ['email', 'password'],
+    fields: ['email', 'password', 'orgId'],
     sensitiveFields: ['password'],
     multiAccount: true,
-    loginUrl: 'https://fleets.bolt.eu/login?to=%2F59449%2Ffinances%2Freports%2FdriverEarnings&tab=email_username',
+    loginUrl: 'https://fleets.bolt.eu/login?to=%2F{orgId}%2Ffinances%2Freports%2FdriverEarnings&tab=email_username',
     report: {
       name: 'Zarobki na kierowce (CSV)',
       menuPath: 'Finanse > Zarobki na kierowce > Eksport CSV',

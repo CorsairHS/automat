@@ -3,18 +3,21 @@ const { computePeriodRange } = require('../dateRange');
 const { waitForAuthStateToSettle, waitForLoginCompletion } = require('../loginHelpers');
 const { humanClick, humanFill, humanDelay } = require('../humanInteraction');
 
-// UWAGA: "59449" w URL to ID organizacji konkretnego partnera (klienta demo) - deep-link
-// przekierowuje po zalogowaniu prosto na strone "Zarobki na kierowce". Inne konta Bolt
-// beda miec inne ID - do sprawdzenia, czy zwykly login (bez ID w URL) tez tam trafia,
-// czy trzeba to ID pobierac/konfigurowac per konto. Na razie zrodlo prawdy to platforms.js.
-const LOGIN_URL = 'https://fleets.bolt.eu/login?to=%2F59449%2Ffinances%2Freports%2FdriverEarnings&tab=email_username';
+// "{orgId}" w URL to ID organizacji/firmy partnera (widoczne w URL panelu po przelaczeniu
+// firmy w przelaczniku "UNITY DRIVE sp. z o.o. / DA INVESTMENT..." w prawym gornym rogu) -
+// jak w boltfood.js, jedno konto/login Bolt (email+haslo) moze miec dostep do wielu firm
+// (rozne miasta), kazda z innym ID. Konfigurowalne per konto (account.fields.orgId) - jedno
+// miasto = jedno konto w UI, ze wspolnymi danymi logowania i osobnym orgId/City/Company.
+function buildLoginUrl(orgId) {
+  return `https://fleets.bolt.eu/login?to=%2F${orgId}%2Ffinances%2Freports%2FdriverEarnings&tab=email_username`;
+}
 
 /**
  * Ekran logowania (zweryfikowany na zrzucie ekranu + DOM, 2026-08-18): jednoetapowy,
  * zakladka "E-mail lub nazwa uzytkownika" domyslnie aktywna. Pola NIE sa powiazane
  * semantycznie z widocznym tekstem etykiety (aria-labelledby wskazuje gdzie indziej),
  * wiec getByLabel() nie dziala - uzywamy stabilnych id: #email / #current-password.
- * Dzieki deep-linkowi w LOGIN_URL, po zalogowaniu Bolt przekierowuje bezposrednio
+ * Dzieki deep-linkowi z buildLoginUrl(), po zalogowaniu Bolt przekierowuje bezposrednio
  * na strone raportu "Zarobki na kierowce" - nie trzeba juz nawigowac przez
  * Finanse > Zarobki na kierowce recznie.
  */
@@ -22,10 +25,15 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
   const log = (msg) => statusCallback?.(msg);
   const page = await context.newPage();
 
+  const orgId = account.fields.orgId;
+  if (!orgId) {
+    throw new Error('Brak ID organizacji (pole "orgId") w konfiguracji konta Bolt - wymagane do zbudowania URL panelu.');
+  }
+
   const isLoggedIn = () => !/login|signin/i.test(page.url());
 
   log('Otwieram panel partnera Bolt...');
-  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(buildLoginUrl(orgId), { waitUntil: 'domcontentloaded' });
   await waitForAuthStateToSettle(page, {
     isLoggedIn,
     isLoginFormVisible: () => page.locator('#email').isVisible().catch(() => false),

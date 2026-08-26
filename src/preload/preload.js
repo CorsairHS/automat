@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('upload:status', listener);
     return () => ipcRenderer.removeListener('upload:status', listener);
   },
+  exportAllSessions: () => ipcRenderer.invoke('sessions:exportAll'),
+  importAllSessions: () => ipcRenderer.invoke('sessions:importAll'),
   runDeleteReports: () => ipcRenderer.invoke('reports:delete'),
   onDeleteStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);

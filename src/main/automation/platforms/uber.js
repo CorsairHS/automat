@@ -170,9 +170,10 @@ function toSlashDate(isoDate) {
  * Klika komorke dnia w otwartym kalendarzu zakresu dat (Custom range) - patrz komentarz
  * przy wywolaniu w syncUberAccount o tym, dlaczego wpisywanie tekstu w pole zostalo
  * porzucone na rzecz bezposredniego klikania w kalendarz (jak w bolt.js). Zaklada, ze
- * wlasciwy miesiac jest juz wyswietlony (TODO, jak w bolt.js: nawigacja miedzy miesiacami
- * nie jest obslugiwana). Komorki wykluczone przez aria-disabled to dni spoza dozwolonego
- * zakresu (np. przyszle, jeszcze nie zakonczone dni rozliczeniowe).
+ * wlasciwy miesiac jest juz wyswietlony (nawigacja - patrz navigateCalendarMonths -
+ * odpowiada za to PRZED wywolaniem tej funkcji). Komorki wykluczone przez aria-disabled
+ * to dni spoza dozwolonego zakresu (np. przyszle, jeszcze nie zakonczone dni
+ * rozliczeniowe).
  */
 async function selectUberCalendarDay(page, isoDate) {
   const day = new Date(`${isoDate}T00:00:00Z`).getUTCDate();
@@ -181,6 +182,39 @@ async function selectUberCalendarDay(page, isoDate) {
     .filter({ hasText: new RegExp(`^${day}$`) })
     .first();
   await humanClick(cell);
+}
+
+/** "2026/07/24" -> 2026*12+7 (do porownywania miesiecy niezaleznie od roku). */
+function yearMonthFromSlashDate(slashDate) {
+  const [year, month] = slashDate.split('/').map(Number);
+  return year * 12 + month;
+}
+
+/** "2026-08-10" -> 2026*12+8 (do porownywania miesiecy niezaleznie od roku). */
+function yearMonthFromIsoDate(isoDate) {
+  const [year, month] = isoDate.split('-').map(Number);
+  return year * 12 + month;
+}
+
+/**
+ * Nawiguje otwarty kalendarz o `deltaMonths` miesiecy (dodatnie - do przodu, ujemne -
+ * wstecz), klikajac przycisk nawigacji tyle razy, ile trzeba. Kalendarz otwiera sie
+ * domyslnie na miesiacu aktualnie ustawionej (domyslnej) daty, ktora NIE musi pokrywac
+ * sie z docelowym okresem (zaobserwowane na zywo 2026-08-25, konto Krakow: domyslny
+ * zakres byl z lipca, docelowy z sierpnia - klikniecie dnia "24"/"25" bez nawigacji
+ * trafialo w zly miesiac, a ponowienie proby powtarzalo ten sam blad w kolko, bo tez nie
+ * nawigowalo). Dopasowanie przyciskow po aria-label (oba warianty jezykowe, jak wszedzie
+ * indziej w tym pliku).
+ */
+async function navigateCalendarMonths(page, deltaMonths) {
+  if (deltaMonths === 0) return;
+  const button = page.getByRole('button', {
+    name: deltaMonths > 0 ? /next month|nast.pny miesi.c/i : /previous month|poprzedni miesi.c/i,
+  });
+  for (let i = 0; i < Math.abs(deltaMonths); i += 1) {
+    await humanClick(button);
+    await humanDelay(200, 400);
+  }
 }
 
 /**
@@ -232,14 +266,24 @@ async function attemptGenerateUberReport(page, from, to, account) {
   }
   const dateInputs = page.locator('input[aria-label="Select a date range."]');
   await dateInputs.nth(0).waitFor({ state: 'visible' });
+  const defaultStartValue = await dateInputs.nth(0).inputValue();
   await humanClick(dateInputs.nth(0));
   await humanDelay(300, 600);
 
   // Wpisywanie tekstu w te pola zawodzilo wielokrotnie (zobacz historie w komentarzach
   // commitow) - klikamy bezposrednio w komorki kalendarza (jak w bolt.js), co jest
-  // bezposrednia zmiana stanu widgetu, bez zadnego parsowania/maskowania tekstu.
+  // bezposrednia zmiana stanu widgetu, bez zadnego parsowania/maskowania tekstu. Przed
+  // kazdym kliknieciem dnia nawigujemy kalendarz do wlasciwego miesiaca (patrz
+  // navigateCalendarMonths) - "from" i "to" moga wypasc w roznych miesiacach.
+  let currentYearMonth = yearMonthFromSlashDate(defaultStartValue);
+  const fromYearMonth = yearMonthFromIsoDate(from);
+  await navigateCalendarMonths(page, fromYearMonth - currentYearMonth);
+  currentYearMonth = fromYearMonth;
   await selectUberCalendarDay(page, from);
   await humanDelay(300, 600);
+
+  const toYearMonth = yearMonthFromIsoDate(to);
+  await navigateCalendarMonths(page, toYearMonth - currentYearMonth);
   await selectUberCalendarDay(page, to);
   await humanDelay(300, 600);
 

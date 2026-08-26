@@ -18,6 +18,34 @@ h1 {
   margin-bottom: 24px;
 }
 
+.platform-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 20px;
+}
+
+.platform-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: #555;
+  cursor: pointer;
+}
+
+.platform-tab:hover {
+  color: #1a1a1a;
+}
+
+.platform-tab.active {
+  color: #1a1a1a;
+  border-bottom-color: #1565c0;
+  font-weight: 600;
+}
+
 .platform-section {
   margin-bottom: 28px;
 }
@@ -166,6 +194,16 @@ button {
 }
 
 .btn-run:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn-secondary {
+  background: #f1f1f1;
+  color: #333;
+}
+
+.btn-secondary:disabled {
   opacity: 0.6;
   cursor: default;
 }

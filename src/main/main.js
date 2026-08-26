@@ -1,8 +1,10 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const fs = require('fs');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
 const credentialStore = require('./credentialStore');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
+const { readSessionState, writeSessionState } = require('./automation/browserSession');
 
 let mainWindow;
 //commit
@@ -132,6 +134,87 @@ ipcMain.handle('upload:run', async (event) => {
     for (const upload of error.succeededUploads || []) {
       lastDownloads.delete(`${upload.platformId}:${upload.accountId}`);
     }
+    return { ok: false, error: error.message };
+  }
+});
+
+// Jeden zbiorczy plik na wszystkie konta naraz (nie osobny plik/przycisk per konto) - patrz
+// renderSessionTransferSection w renderer.js. Zawiera PELNA konfiguracje kazdego konta
+// (etykieta, pola logowania w JAWNYM TEKSCIE, miasto/firma, okres) plus sesje logowania
+// (cookies) - swiadoma decyzja, zeby import na nowym komputerze mogl sam utworzyc brakujace
+// konta i podpiac im sesje, bez wczesniejszego recznego zakladania kont o pasujacych
+// etykietach. To znaczy, ze ten plik trzeba traktowac jak zbior hasel (nie wysylac otwartym
+// tekstem) - patrz ostrzezenie w UI.
+ipcMain.handle('sessions:exportAll', async () => {
+  const dialogResult = await dialog.showSaveDialog(mainWindow, {
+    title: 'Eksportuj wszystkie sesje',
+    defaultPath: 'sesje-logowania.json',
+    filters: [{ name: 'Plik sesji (JSON)', extensions: ['json'] }],
+  });
+  if (dialogResult.canceled || !dialogResult.filePath) {
+    return { ok: false, canceled: true };
+  }
+
+  try {
+    const sessions = [];
+    for (const platform of PLATFORMS) {
+      if (!platform.report) continue;
+      for (const account of credentialStore.listAccounts(platform.id)) {
+        const storageState = await readSessionState(app.getPath('userData'), platform.id, account.accountId);
+        sessions.push({
+          platformId: platform.id,
+          label: account.label,
+          city: account.city,
+          company: account.company,
+          periodMode: account.periodMode,
+          periodFrom: account.periodFrom,
+          periodTo: account.periodTo,
+          fields: account.fields,
+          storageState,
+        });
+      }
+    }
+    fs.writeFileSync(dialogResult.filePath, JSON.stringify({ exportedAt: new Date().toISOString(), sessions }, null, 2));
+    return { ok: true, filePath: dialogResult.filePath, count: sessions.length };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+// Dopasowanie po platformId+etykiecie (accountId to lokalny UUID, inny na kazdym
+// komputerze). Gdy konto o danej etykiecie nie istnieje lokalnie - tworzymy je z pelnej
+// konfiguracji z pliku; gdy istnieje - nadpisujemy jego dane danymi z pliku, zeby zrodlem
+// prawdy bylo to, co wyeksportowano. Dopiero potem doczepiamy sesje pod finalny accountId.
+ipcMain.handle('sessions:importAll', async () => {
+  const dialogResult = await dialog.showOpenDialog(mainWindow, {
+    title: 'Importuj wszystkie sesje',
+    filters: [{ name: 'Plik sesji (JSON)', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+    return { ok: false, canceled: true };
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(dialogResult.filePaths[0], 'utf-8'));
+    const imported = [];
+    for (const entry of data.sessions || []) {
+      const existingAccount = credentialStore.listAccounts(entry.platformId).find((a) => a.label === entry.label);
+      const accountId = credentialStore.saveAccount(entry.platformId, {
+        accountId: existingAccount ? existingAccount.accountId : undefined,
+        label: entry.label,
+        city: entry.city,
+        company: entry.company,
+        periodMode: entry.periodMode,
+        periodFrom: entry.periodFrom,
+        periodTo: entry.periodTo,
+        fields: entry.fields,
+      });
+      await writeSessionState(app.getPath('userData'), entry.platformId, accountId, entry.storageState);
+      imported.push(`${entry.platformId}:${entry.label}`);
+    }
+    return { ok: true, imported };
+  } catch (error) {
     return { ok: false, error: error.message };
   }
 });
