@@ -63,4 +63,14 @@ test.describe('FreeNow resilience', () => {
 
     expect(fs.existsSync(result.filePath)).toBe(true);
   });
+
+  test('brak wariantu WITH VAT: syncFreenowAccount rzuca czytelnym bledem', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installFreenowMock(context, { includeWithVatFile: false });
+    const account = makeAccount();
+
+    await expect(
+      syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} })
+    ).rejects.toThrow(/nie znaleziono pliku wariantu with vat/i);
+  });
 });
