@@ -51,4 +51,18 @@ test.describe('Uber resilience', () => {
 
     expect(fs.existsSync(result.filePath)).toBe(true);
   });
+
+  test('popup po wyborze dat: dismissChatBubble odslania kolejny klik', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      popupAfterDateSelection: true,
+    });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
 });
