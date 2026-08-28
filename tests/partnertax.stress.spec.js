@@ -70,4 +70,15 @@ test.describe('PartnerTax admin resilience', () => {
     expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt']);
     expect(mock.state.savedSources).toEqual([{ system: '17' }]);
   });
+
+  test('bardzo wolny zapis: uploadToPartnerTax mimo to konczy sie sukcesem', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, { hangOnFirstSave: true });
+    const account = makeAccount();
+
+    await uploadToPartnerTax({ context, account, uploads: [makeUpload()], statusCallback: () => {} });
+
+    expect(mock.state.savedSources).toEqual([{ system: '17' }]);
+  });
 });
