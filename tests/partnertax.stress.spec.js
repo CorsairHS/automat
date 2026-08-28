@@ -81,4 +81,29 @@ test.describe('PartnerTax admin resilience', () => {
 
     expect(mock.state.savedSources).toEqual([{ system: '17' }]);
   });
+
+  test('usuwanie po aliasie systemu: deleteReportsFromPartnerTax wisi mimo poprawnego usuniecia po stronie serwera', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, { preSeedSavedSources: [{ system: '65' }] });
+    const account = makeAccount();
+
+    let settled = false;
+    deleteReportsFromPartnerTax({ context, account, statusCallback: () => {} })
+      .then(() => { settled = true; })
+      .catch(() => { settled = true; });
+
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+
+    // Playwright Test nie ma domyslnego limitu czasu akcji (patrz spec) - .evaluate()
+    // w getSystemRowValues wisi wiec w nieskonczonosc, nie rzuca czystego bledu w
+    // rozsadnym czasie. Zamiast lapac blad, dowodzimy ze obietnica NADAL nie jest
+    // rozstrzygnieta po 10s (komfortowy margines ponad ~1-2s normalnej sciezki sukcesu).
+    expect(settled).toBe(false);
+
+    // Mimo ze klient (Playwright) nadal czeka, serwer (mock) juz przetworzyl usuniecie -
+    // to dokladnie ten sam mechanizm co realnie zgloszony bug klienta ("wisial, a potem
+    // wywalal sie bledem mimo ze serwer zdazyl juz zapisac plik"), tylko przy usuwaniu
+    // zamiast dodawaniu.
+    expect(mock.state.savedSources).toEqual([]);
+  });
 });
