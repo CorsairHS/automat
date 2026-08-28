@@ -41,4 +41,15 @@ test.describe('Bolt resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('data,column');
   });
+
+  test('sesja juz zalogowana: pomija formularz logowania', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installBoltMock(context, { startLoggedIn: true });
+    const account = makeAccount();
+
+    const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.getLoginPageServedCount()).toBe(0);
+  });
 });
