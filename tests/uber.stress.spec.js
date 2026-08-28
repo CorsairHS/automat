@@ -41,4 +41,14 @@ test.describe('Uber resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('data,column');
   });
+
+  test('pelne generowanie: dialog, kalendarz, organizacja, pobranie', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: false });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
 });
