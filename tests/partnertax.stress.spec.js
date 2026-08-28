@@ -45,7 +45,7 @@ test.describe('PartnerTax admin resilience', () => {
 
     await uploadToPartnerTax({ context, account, uploads: [makeUpload()], statusCallback: () => {} });
 
-    expect(mock.state.savedSources).toEqual([{ system: '17' }]);
+    expect(mock.state.savedSources).toEqual([{ system: '17', city: '7', company: '5', file: '1' }]);
   });
 
   test('upload wielu plikow: czesciowe niepowodzenie zwraca juz zapisane pliki', async () => {
@@ -54,8 +54,8 @@ test.describe('PartnerTax admin resilience', () => {
     const account = makeAccount();
     const uploads = [
       makeUpload({ platformId: 'bolt' }),
-      makeUpload({ platformId: 'uber', city: 'nieznane-miasto' }),
-      makeUpload({ platformId: 'freenow' }),
+      makeUpload({ platformId: 'uber' }),
+      makeUpload({ platformId: 'freenow', city: 'nieznane-miasto' }),
     ];
 
     let caughtError;
@@ -67,8 +67,11 @@ test.describe('PartnerTax admin resilience', () => {
 
     expect(caughtError).toBeDefined();
     expect(caughtError.message).toMatch(/nieznane miasto/i);
-    expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt']);
-    expect(mock.state.savedSources).toEqual([{ system: '17' }]);
+    expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt', 'uber']);
+    expect(mock.state.savedSources).toEqual([
+      { system: '17', city: '7', company: '5', file: '1' },
+      { system: '32', city: '7', company: '5', file: '1' },
+    ]);
   });
 
   test('bardzo wolny zapis: uploadToPartnerTax mimo to konczy sie sukcesem', async () => {
@@ -77,9 +80,12 @@ test.describe('PartnerTax admin resilience', () => {
     const mock = await installPartnerTaxMock(context, { hangOnFirstSave: true });
     const account = makeAccount();
 
+    const started = Date.now();
     await uploadToPartnerTax({ context, account, uploads: [makeUpload()], statusCallback: () => {} });
 
-    expect(mock.state.savedSources).toEqual([{ system: '17' }]);
+    expect(Date.now() - started).toBeGreaterThan(25_000);
+    expect(mock.state.saveAttemptCount).toBe(1);
+    expect(mock.state.savedSources).toEqual([{ system: '17', city: '7', company: '5', file: '1' }]);
   });
 
   test('usuwanie po aliasie systemu: deleteReportsFromPartnerTax wisi mimo poprawnego usuniecia po stronie serwera', async () => {

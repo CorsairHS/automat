@@ -183,7 +183,7 @@ async function installPartnerTaxMock(context, scenario = {}) {
   function commitPending() {
     for (const [rowStr, fields] of Object.entries(state.pendingNewRows)) {
       if (fields.system && fields.city && fields.company && fields.file) {
-        state.savedSources.push({ system: fields.system });
+        state.savedSources.push({ system: fields.system, city: fields.city, company: fields.company, file: fields.file });
         delete state.pendingNewRows[rowStr];
       }
     }
@@ -194,6 +194,7 @@ async function installPartnerTaxMock(context, scenario = {}) {
       }
       state.pendingDeletes.clear();
     }
+    state.pendingNewRows = {};
   }
 
   await context.route('**/*', (route) => route.abort('blockedbyclient'));
@@ -252,7 +253,9 @@ async function installPartnerTaxMock(context, scenario = {}) {
     }
 
     if (url.pathname === changeFormPath) {
-      commitPending();
+      if (method === 'POST') {
+        commitPending();
+      }
 
       if (method === 'POST' && hangOnFirstSave && state.saveAttemptCount === 0) {
         state.saveAttemptCount += 1;
