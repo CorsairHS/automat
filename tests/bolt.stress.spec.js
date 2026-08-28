@@ -50,7 +50,7 @@ test.describe('Bolt resilience', () => {
     const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
-    expect(mock.getLoginPageServedCount()).toBe(0);
+    expect(mock.getLoginRequestCount()).toBe(1);
   });
 
   test('sesja wygasa w trakcie: syncBoltAccount rzuca bledem zamiast wisiec w nieskonczonosc', async () => {
@@ -58,15 +58,18 @@ test.describe('Bolt resilience', () => {
     const context = await browser.newContext({ acceptDownloads: true });
     await installBoltMock(context, { startLoggedIn: true, expireAfterDateSelected: true });
     const account = makeAccount();
+    const startedAt = Date.now();
 
     await expect(
       syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/timeout.*120000ms/i);
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(100_000);
   });
 
-  test('wolne ladowanie SPA: dziala mimo opoznien sieciowych', async () => {
+  test('wolne ladowanie SPA: waitForAuthStateToSettle przezywa opoznienia sieciowe podczas gdy zalogowana sesja laduje', async () => {
     const context = await browser.newContext({ acceptDownloads: true });
-    await installBoltMock(context, { startLoggedIn: false, networkDelayMs: 2000 });
+    await installBoltMock(context, { startLoggedIn: true, networkDelayMs: 2000 });
     const account = makeAccount();
 
     const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });

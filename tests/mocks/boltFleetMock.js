@@ -92,7 +92,9 @@ async function installBoltMock(context, scenario = {}) {
   const reportUrl = `https://fleets.bolt.eu${reportPath}`;
   const loginUrl = `https://fleets.bolt.eu${loginPath}`;
 
-  let loginPageServedCount = 0;
+  let loginRequestCount = 0;
+
+  await context.route('**/*', (route) => route.abort('blockedbyclient'));
 
   await context.route('https://fleets.bolt.eu/**', async (route) => {
     if (networkDelayMs > 0) {
@@ -102,6 +104,7 @@ async function installBoltMock(context, scenario = {}) {
     const url = new URL(route.request().url());
 
     if (url.pathname === loginPath) {
+      loginRequestCount += 1;
       if (startLoggedIn) {
         return route.fulfill({
           status: 200,
@@ -109,7 +112,6 @@ async function installBoltMock(context, scenario = {}) {
           body: `<script>window.location.replace(${JSON.stringify(reportUrl)})</script>`,
         });
       }
-      loginPageServedCount += 1;
       return route.fulfill({
         status: 200,
         contentType: 'text/html',
@@ -142,7 +144,7 @@ async function installBoltMock(context, scenario = {}) {
   return {
     reportUrl,
     loginUrl,
-    getLoginPageServedCount: () => loginPageServedCount,
+    getLoginRequestCount: () => loginRequestCount,
   };
 }
 
