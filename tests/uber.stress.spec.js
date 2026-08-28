@@ -65,4 +65,15 @@ test.describe('Uber resilience', () => {
 
     expect(fs.existsSync(result.filePath)).toBe(true);
   });
+
+  test('zawieszony status W toku: syncUberAccount odswieza strone i konczy sukcesem', async () => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: true });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
 });
