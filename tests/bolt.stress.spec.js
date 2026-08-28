@@ -63,4 +63,14 @@ test.describe('Bolt resilience', () => {
       syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} })
     ).rejects.toThrow();
   });
+
+  test('wolne ladowanie SPA: dziala mimo opoznien sieciowych', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installBoltMock(context, { startLoggedIn: false, networkDelayMs: 2000 });
+    const account = makeAccount();
+
+    const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
 });
