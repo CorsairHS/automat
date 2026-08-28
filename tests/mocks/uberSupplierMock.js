@@ -182,6 +182,7 @@ function buildAppHtml(state, options) {
 
       document.querySelector('[data-testid="first-impression-dismiss"]').addEventListener('click', function () {
         document.getElementById('first-impression-overlay').style.display = 'none';
+        fetch('/api/mock/popup-dismissed', { method: 'POST' });
       });
 
       document.getElementById('org-trigger-wrap').addEventListener('click', function () {
@@ -256,6 +257,7 @@ async function installUberMock(context, scenario = {}) {
     reportGenerating: false,
     pageLoadCount: 0,
     generatedAtLoadCount: -1,
+    popupDismissedCount: 0,
   };
 
   const options = {
@@ -284,6 +286,11 @@ async function installUberMock(context, scenario = {}) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     }
 
+    if (url.pathname === '/api/mock/popup-dismissed' && method === 'POST') {
+      state.popupDismissedCount += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    }
+
     if (url.pathname === '/api/mock/csv-export') {
       const ready =
         state.reportReady ||
@@ -294,7 +301,11 @@ async function installUberMock(context, scenario = {}) {
       return route.fulfill({ status: 200, contentType: 'text/csv', body: csvContent });
     }
 
-    // Dokument glowny (kazde zaladowanie/reload).
+    // Dokument glowny (kazde zaladowanie/reload). Inne typy requestow
+    // (np. favicon) nie powinny liczyc sie jako zaladowanie strony.
+    if (route.request().resourceType() !== 'document') {
+      return route.fulfill({ status: 404, body: 'not found' });
+    }
     state.pageLoadCount += 1;
     return route.fulfill({
       status: 200,

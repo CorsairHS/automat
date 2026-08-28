@@ -33,28 +33,32 @@ test.describe('Uber resilience', () => {
 
   test('raport juz istnieje: pomija dialog generowania', async () => {
     const context = await browser.newContext({ acceptDownloads: true });
-    await installUberMock(context, { reportAlreadyExists: true });
+    const mock = await installUberMock(context, { reportAlreadyExists: true });
     const account = makeAccount();
 
     const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('data,column');
+    expect(mock.state.reportGenerating).toBe(false);
   });
 
   test('pelne generowanie: dialog, kalendarz, organizacja, pobranie', async () => {
+    test.setTimeout(90_000);
     const context = await browser.newContext({ acceptDownloads: true });
-    await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: false });
+    const mock = await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: false });
     const account = makeAccount();
 
     const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.reportGenerating).toBe(true);
   });
 
   test('popup po wyborze dat: dismissChatBubble odslania kolejny klik', async () => {
+    test.setTimeout(90_000);
     const context = await browser.newContext({ acceptDownloads: true });
-    await installUberMock(context, {
+    const mock = await installUberMock(context, {
       reportAlreadyExists: false,
       requireReloadForDownloadReady: false,
       popupAfterDateSelection: true,
@@ -64,16 +68,18 @@ test.describe('Uber resilience', () => {
     const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.popupDismissedCount).toBeGreaterThanOrEqual(1);
   });
 
   test('zawieszony status W toku: syncUberAccount odswieza strone i konczy sukcesem', async () => {
     test.setTimeout(120_000);
     const context = await browser.newContext({ acceptDownloads: true });
-    await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: true });
+    const mock = await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: true });
     const account = makeAccount();
 
     const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.pageLoadCount).toBeGreaterThan(1);
   });
 });
