@@ -62,6 +62,11 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     }
   }
 
+  // Zamykamy oba znane popupy (bąbelek czatu, baner instalacji aplikacji mobilnej) od razu
+  // po zalogowaniu, zanim jeszcze cokolwiek klikniemy - nie czekamy, az akurat przeszkodza w
+  // pierwszej interakcji (klient zglosil, ze wolal, zeby znikaly natychmiast).
+  await dismissChatBubble(page);
+
   const { from, to } = computePeriodRange(account);
 
   // Nazwa pliku/wiersza wygenerowanego raportu ma stabilny, jezykowo-niezalezny prefiks
@@ -116,12 +121,34 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     // na zywo 2026-08-25: automat pobral stary raport za inny okres, bo nowy wiersz nie
     // trafil od razu na pozycje nth(1) i pobranie ruszylo z gotowego juz starego wiersza).
     log('Czekam az nowo wygenerowany raport pojawi sie na liscie...');
-    const rowAppearDeadline = Date.now() + 30000;
-    while (Date.now() < rowAppearDeadline && (await matchingReportRow().count()) === 0) {
-      await page.waitForTimeout(500);
+    // Tabela potrafi nie doladowac nowego wiersza mimo ze zadanie generowania poszlo do
+    // backendu poprawnie (ta sama "zawieszajaca sie" strona, co przy pobieraniu - patrz
+    // odswiezanie w petli oczekiwania na download nizej). Zamiast od razu poddawac cala
+    // synchronizacje bledem, probujemy kilka razy z twardym odswiezeniem strony miedzy
+    // probami - NIE generujemy raportu ponownie (to zostawilibysmy duplikat), tylko
+    // sprawdzamy po odswiezeniu, czy wiersz jednak juz tam jest.
+    const ROW_WAIT_MS = 30000;
+    const MAX_ROW_WAIT_ATTEMPTS = 3;
+    let rowFound = false;
+    for (let attempt = 1; attempt <= MAX_ROW_WAIT_ATTEMPTS; attempt += 1) {
+      const rowAppearDeadline = Date.now() + ROW_WAIT_MS;
+      while (Date.now() < rowAppearDeadline && (await matchingReportRow().count()) === 0) {
+        await page.waitForTimeout(500);
+      }
+      if ((await matchingReportRow().count()) > 0) {
+        rowFound = true;
+        break;
+      }
+      if (attempt < MAX_ROW_WAIT_ATTEMPTS) {
+        log(`Raport nadal niewidoczny na liscie - odswiezam strone i probuje ponownie (${attempt}/${MAX_ROW_WAIT_ATTEMPTS})...`);
+        await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        await dismissChatBubble(page);
+        await humanClick(page.locator('[data-testid="header-nav-/reports"]'));
+        await page.getByRole('row').nth(1).waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+      }
     }
-    if ((await matchingReportRow().count()) === 0) {
-      throw new Error('Nowo wygenerowany raport nie pojawil sie na liscie w wyznaczonym czasie.');
+    if (!rowFound) {
+      throw new Error('Nowo wygenerowany raport nie pojawil sie na liscie mimo kilku prob z odswiezeniem strony.');
     }
   }
 
@@ -137,6 +164,15 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   }
   const downloadButton = matchingReportRow().getByRole('button', { name: /download|pobierz/i });
   const overallDeadline = Date.now() + 5 * 60 * 1000;
+  // Uber Supplier Portal potrafi "zawiesic" stan wiersza (status zostaje na "W toku" mimo
+  // ze raport jest juz gotowy po stronie backendu, klikniecie w przycisk pobierania w tym
+  // stanie nic nie robi) - obserwowane na zywo. Samo ponawianie klikniecia w te sama,
+  // nieodswiezona strone tego nie naprawia; pomaga twarde odswiezenie strony (page.reload),
+  // po ktorym trzeba wrocic na zakladke Reports (SPA bez wlasnego URL - patrz komentarz przy
+  // isLoggedIn wyzej). Odswiezamy wiec co REFRESH_INTERVAL_MS, nie przy kazdej nieudanej
+  // probie, zeby nie przeszkadzac stronie w normalnym odswiezaniu statusu.
+  const REFRESH_INTERVAL_MS = 30000;
+  let lastRefreshAt = Date.now();
   let download = null;
   while (Date.now() < overallDeadline && !download) {
     try {
@@ -145,7 +181,16 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
         humanClick(downloadButton),
       ]);
     } catch {
-      await page.waitForTimeout(4000);
+      if (Date.now() - lastRefreshAt >= REFRESH_INTERVAL_MS) {
+        log('Status raportu sie nie zmienia - odswiezam strone Uber...');
+        await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        await dismissChatBubble(page);
+        await humanClick(page.locator('[data-testid="header-nav-/reports"]'));
+        await page.getByRole('row').nth(1).waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+        lastRefreshAt = Date.now();
+      } else {
+        await page.waitForTimeout(4000);
+      }
     }
   }
   if (!download) {
@@ -176,12 +221,48 @@ function toSlashDate(isoDate) {
  * rozliczeniowe).
  */
 async function selectUberCalendarDay(page, isoDate) {
+  await dismissChatBubble(page);
   const day = new Date(`${isoDate}T00:00:00Z`).getUTCDate();
   const cell = page
     .locator('[role="gridcell"]:not([aria-disabled="true"])')
     .filter({ hasText: new RegExp(`^${day}$`) })
     .first();
   await humanClick(cell);
+}
+
+/**
+ * Uber Supplier Portal pokazuje czasem popupy zaslaniajace/przechwytujace kliknięcia -
+ * zaobserwowane na zywo DWA NIEZALEZNE komponenty, ktore potrafia byc widoczne jednoczesnie
+ * (zrzut ekranu z klienta 2026-08-26): bąbelek czatu w rogu ekranu ("Masz pytanie? Chętnie z
+ * Tobą porozmawiamy.", przycisk zamkniecia z data-testid="first-impression-dismiss") oraz
+ * pelnoszerokosciowy niebieski baner u gory strony ("Zainstaluj naszą aplikację mobilną!",
+ * przycisk zamkniecia to generyczna ikona Base Web "Delete" uzywana jako X - bez wlasnego
+ * atrybutu identyfikujacego, wiec zawezamy szukanie do ikon w gornych ~60px viewportu, zeby
+ * nie trafic przypadkiem w inny przycisk "Delete"/kosz na smiec gdzies indziej na stronie).
+ * Potrafia wyskoczyc w dowolnym momencie procesu logowania/generowania raportu - w tym TUZ po
+ * wybraniu obu dat zakresu, zaslaniajac caly formularz i przechwytujac kolejne kliknięcie
+ * (zgloszone przez klienta jako "zatrzymal sie na wybraniu daty i dalej nie idzie") - dlatego
+ * wywolujemy to przed KAZDA proba klikniecia w tej sciezce, nie tylko przy kalendarzu. Cichy
+ * no-op dla kazdego popupu z osobna, gdy akurat nie jest widoczny.
+ */
+async function dismissChatBubble(page) {
+  const chatDismissBtn = page.locator('[data-testid="first-impression-dismiss"]');
+  if (await chatDismissBtn.isVisible().catch(() => false)) {
+    await chatDismissBtn.click({ timeout: 2000 }).catch(() => {});
+    await humanDelay(200, 400);
+  }
+
+  const closeIcons = page.locator('svg').filter({ has: page.locator('title', { hasText: /^Delete$/ }) });
+  const closeIconCount = await closeIcons.count().catch(() => 0);
+  for (let i = 0; i < closeIconCount; i += 1) {
+    const icon = closeIcons.nth(i);
+    const box = await icon.boundingBox().catch(() => null);
+    if (box && box.y < 60) {
+      await icon.click({ timeout: 2000 }).catch(() => {});
+      await humanDelay(200, 400);
+      break;
+    }
+  }
 }
 
 /** "2026/07/24" -> 2026*12+7 (do porownywania miesiecy niezaleznie od roku). */
@@ -212,6 +293,7 @@ async function navigateCalendarMonths(page, deltaMonths) {
     name: deltaMonths > 0 ? /next month|nast.pny miesi.c/i : /previous month|poprzedni miesi.c/i,
   });
   for (let i = 0; i < Math.abs(deltaMonths); i += 1) {
+    await dismissChatBubble(page);
     await humanClick(button);
     await humanDelay(200, 400);
   }
@@ -232,6 +314,7 @@ async function attemptGenerateUberReport(page, from, to, account) {
   // ktory zawiera zagniezdzony div z tym samym tekstem - getByRole unikalnie trafia w
   // zewnetrzny element, w przeciwienstwie do filtrowania po [aria-selected] (kolizja z
   // zagniezdzonym divem).
+  await dismissChatBubble(page);
   await humanClick(page.locator('#report-type'));
   await humanDelay(300, 700);
   await humanClick(
@@ -249,6 +332,7 @@ async function attemptGenerateUberReport(page, from, to, account) {
   // id/aria-controls segment "reports/" (np. "tabs-bui1-tab-reports/report-schedules"),
   // zakladki w panelu nie - filtrujemy po tym, zeby zawezic do panelu.
   const timeFrameTrigger = page.getByPlaceholder(/select time frame for report|wybierz przedzia. czasowy raportu/i);
+  await dismissChatBubble(page);
   await humanClick(timeFrameTrigger);
   // Dopasowanie po pozycji (nth(1)) okazalo sie zawodne - prawdopodobnie animacja panelu
   // chwilowo duplikuje/podmienia elementy zakladek w DOM. Dopasowujemy po dokladnym
@@ -261,12 +345,14 @@ async function attemptGenerateUberReport(page, from, to, account) {
   await customRangeTab.waitFor({ state: 'visible' });
   for (let attempt = 0; attempt < 8; attempt++) {
     if ((await customRangeTab.getAttribute('aria-selected')) === 'true') break;
+    await dismissChatBubble(page);
     await humanClick(customRangeTab, { force: true });
     await page.waitForTimeout(300);
   }
   const dateInputs = page.locator('input[aria-label="Select a date range."]');
   await dateInputs.nth(0).waitFor({ state: 'visible' });
   const defaultStartValue = await dateInputs.nth(0).inputValue();
+  await dismissChatBubble(page);
   await humanClick(dateInputs.nth(0));
   await humanDelay(300, 600);
 
@@ -307,6 +393,11 @@ async function attemptGenerateUberReport(page, from, to, account) {
   // powodowal cofniecie sie na ekran wyboru dat (zgloszone przez klienta jako "program
   // wchodzi drugi raz w daty"/"wychodzi z ekranu generacji raportu"). Klikamy wiec od
   // razu w pole-wyzwalacz, zeby zwinac zewnetrzny panel "Report time range".
+  // UWAGA (na zywo): to samo "first impression" okienko (patrz dismissChatBubble) potrafi
+  // tu wyskoczyc na pelnym ekranie z przyciemnionym tlem TUZ po wybraniu obu dat i
+  // zaslonic/przechwycic ten klik, zamrazajac formularz z wypelnionymi juz datami (zgloszone
+  // przez klienta jako "zatrzymal sie na wybraniu daty i dalej nie idzie").
+  await dismissChatBubble(page);
   await humanClick(timeFrameTrigger);
 
   // Pole organizacji jest readonly (klikniecie otwiera liste, nie da sie wpisac tekstu).
@@ -327,6 +418,7 @@ async function attemptGenerateUberReport(page, from, to, account) {
   // ja bezposrednio bez zadnego dopasowania tekstu. Dopiero przy wielu organizacjach
   // uzywamy account.company do wyboru wlasciwej.
   const orgInput = page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i);
+  await dismissChatBubble(page);
   await humanClick(orgInput);
   await humanDelay(300, 700);
   // `label[data-baseweb="checkbox"]` bez zawezenia szuka na CALEJ stronie, nie tylko w tym
@@ -378,6 +470,7 @@ async function attemptGenerateUberReport(page, from, to, account) {
   if (await generateButton.isDisabled().catch(() => false)) {
     throw new Error('Przycisk "Wygeneruj" jest nieaktywny (disabled) - formularz raportu ma niewypelnione/nieprawidlowe pole (np. organizacje).');
   }
+  await dismissChatBubble(page);
   await humanClick(generateButton);
   // Dialog "Wygeneruj raport" NIE zamyka sie sam po kliknieciu - zaslania tabele i blokuje
   // kliknieca w przycisk pobierania ponizej. Zamykamy go (zadanie generowania raportu jest
@@ -398,6 +491,7 @@ async function generateUberReportWithRetry(page, from, to, account, statusCallba
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     log(`Generuje raport "Payments Driver" za okres ${from} - ${to} (proba ${attempt}/${attempts})...`);
+    await dismissChatBubble(page);
     await humanClick(page.locator('[data-tracking-name="report-generation-initiated"]'));
     await humanDelay(400, 900);
     try {
