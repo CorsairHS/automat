@@ -42,4 +42,15 @@ test.describe('FreeNow resilience', () => {
     expect(result.filePath).toMatch(/with[_\s-]?vat/i);
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('with_vat,column');
   });
+
+  test('sesja juz zalogowana: pomija formularz logowania', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installFreenowMock(context, { startLoggedIn: true });
+    const account = makeAccount();
+
+    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(result.filePath).toMatch(/with[_\s-]?vat/i);
+  });
 });
