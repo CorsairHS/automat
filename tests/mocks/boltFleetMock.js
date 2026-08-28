@@ -103,7 +103,11 @@ async function installBoltMock(context, scenario = {}) {
 
     if (url.pathname === loginPath) {
       if (startLoggedIn) {
-        return route.fulfill({ status: 302, headers: { location: reportUrl } });
+        return route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: `<script>window.location.replace(${JSON.stringify(reportUrl)})</script>`,
+        });
       }
       loginPageServedCount += 1;
       return route.fulfill({
