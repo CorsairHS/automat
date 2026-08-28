@@ -53,4 +53,14 @@ test.describe('FreeNow resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(result.filePath).toMatch(/with[_\s-]?vat/i);
   });
+
+  test('duplikat linku Zarobki: dopasowanie po dokladnym tekscie omija kolizje', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installFreenowMock(context, { duplicateEarningsLink: true });
+    const account = makeAccount();
+
+    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
 });
