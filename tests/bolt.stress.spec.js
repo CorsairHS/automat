@@ -52,4 +52,15 @@ test.describe('Bolt resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(mock.getLoginPageServedCount()).toBe(0);
   });
+
+  test('sesja wygasa w trakcie: syncBoltAccount rzuca bledem zamiast wisiec w nieskonczonosc', async () => {
+    test.setTimeout(150_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installBoltMock(context, { startLoggedIn: true, expireAfterDateSelected: true });
+    const account = makeAccount();
+
+    await expect(
+      syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} })
+    ).rejects.toThrow();
+  });
 });
