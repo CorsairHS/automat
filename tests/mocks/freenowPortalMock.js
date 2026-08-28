@@ -33,11 +33,19 @@ function buildDashboardHtml({ earningsUrl, duplicateEarningsLink }) {
   const extraLink = duplicateEarningsLink
     ? `<a href="${earningsUrl}">Szczegoly zarobkow</a>`
     : '';
+  // Trzeci link (INNY href, ale tekst ZAWIERA "Zarobki" jako podciag) - kolizja
+  // wystapilaby dopiero bez `exact: true` w getByRole. Gwarantuje, ze regresja
+  // do niescislego dopasowania po tekscie zostanie wykryta, nie tylko regresja
+  // do dopasowania po href.
+  const extraSubstringLink = duplicateEarningsLink
+    ? '<a href="/earnings-summary">Zarobki kierowcow</a>'
+    : '';
   return `<!doctype html>
 <html>
 <body>
   <a href="${earningsUrl}">Zarobki</a>
   ${extraLink}
+  ${extraSubstringLink}
 </body>
 </html>`;
 }

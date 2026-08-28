@@ -17,6 +17,11 @@ function makeAccount(overrides = {}) {
   };
 }
 
+function collectStatusMessages() {
+  const messages = [];
+  return { statusCallback: (msg) => messages.push(msg), messages };
+}
+
 test.describe('FreeNow resilience', () => {
   let browser;
   let downloadDir;
@@ -36,11 +41,13 @@ test.describe('FreeNow resilience', () => {
     await installFreenowMock(context, {});
     const account = makeAccount();
 
-    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} });
+    const status = collectStatusMessages();
+    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: status.statusCallback });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(result.filePath).toMatch(/with[_\s-]?vat/i);
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('with_vat,column');
+    expect(status.messages.some((m) => m.includes('Loguje sie do FreeNow'))).toBe(true);
   });
 
   test('sesja juz zalogowana: pomija formularz logowania', async () => {
@@ -48,10 +55,12 @@ test.describe('FreeNow resilience', () => {
     await installFreenowMock(context, { startLoggedIn: true });
     const account = makeAccount();
 
-    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} });
+    const status = collectStatusMessages();
+    const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: status.statusCallback });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(result.filePath).toMatch(/with[_\s-]?vat/i);
+    expect(status.messages.some((m) => m.includes('Loguje sie do FreeNow'))).toBe(false);
   });
 
   test('duplikat linku Zarobki: dopasowanie po dokladnym tekscie omija kolizje', async () => {
@@ -62,6 +71,12 @@ test.describe('FreeNow resilience', () => {
     const result = await syncFreenowAccount({ context, account, downloadDir, statusCallback: () => {} });
 
     expect(fs.existsSync(result.filePath)).toBe(true);
+
+    const inspectionPage = await context.newPage();
+    await inspectionPage.goto('https://portal.free-now.com/dashboard');
+    expect(await inspectionPage.locator('a[href$="/earnings"]').count()).toBe(2);
+    expect(await inspectionPage.getByText('Zarobki', { exact: false }).count()).toBeGreaterThan(1);
+    await inspectionPage.close();
   });
 
   test('brak wariantu WITH VAT: syncFreenowAccount rzuca czytelnym bledem', async () => {
