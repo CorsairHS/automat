@@ -47,4 +47,27 @@ test.describe('PartnerTax admin resilience', () => {
 
     expect(mock.state.savedSources).toEqual([{ system: '17' }]);
   });
+
+  test('upload wielu plikow: czesciowe niepowodzenie zwraca juz zapisane pliki', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {});
+    const account = makeAccount();
+    const uploads = [
+      makeUpload({ platformId: 'bolt' }),
+      makeUpload({ platformId: 'uber', city: 'nieznane-miasto' }),
+      makeUpload({ platformId: 'freenow' }),
+    ];
+
+    let caughtError;
+    try {
+      await uploadToPartnerTax({ context, account, uploads, statusCallback: () => {} });
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeDefined();
+    expect(caughtError.message).toMatch(/nieznane miasto/i);
+    expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt']);
+    expect(mock.state.savedSources).toEqual([{ system: '17' }]);
+  });
 });
