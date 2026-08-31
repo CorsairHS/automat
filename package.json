@@ -43,7 +43,8 @@
     "publish": {
       "provider": "github",
       "owner": "CorsairHS",
-      "repo": "automat-releases"
+      "repo": "automat-releases",
+      "releaseType": "release"
     },
     "mac": {
       "category": "public.app-category.business",
