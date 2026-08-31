@@ -635,8 +635,9 @@ function renderAccountCard(platform, account) {
 
   card.appendChild(actions);
 
-  // Pobieranie raportu jest zaimplementowane tylko dla platform ze zdefiniowanym
-  // raportem (Uber/Bolt/FreeNow) - PartnerTax (upload) to osobny modul, jeszcze niegotowy.
+  // Przycisk "Pobierz" widoczny tylko dla platform ze zdefiniowanym raportem
+  // (Uber/Bolt/FreeNow) - PartnerTax to osobny modul (upload/usuwanie), bez wlasnego
+  // pobierania, wiec platform.report jest dla niej celowo nieustawione.
   if (!isNew && platform.report) {
     const runRow = document.createElement('div');
     runRow.className = 'run-row';

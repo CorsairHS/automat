@@ -21,7 +21,7 @@ function sanitizeFolderName(name) {
 /**
  * Uruchamia pobieranie raportu dla jednego konta. Otwiera widoczne okno przegladarki
  * (partner moze recznie dokonczyc 2FA), pobiera plik i zwraca jego sciezke lokalna.
- * PartnerTax platforma (upload) nie jest tu obslugiwana - to osobny modul (krok 5).
+ * PartnerTax platforma (upload) nie jest tu obslugiwana - to osobny modul (runUpload).
  */
 async function runDownload(userDataRoot, platformId, account, { statusCallback } = {}) {
   const syncFn = SYNC_FUNCTIONS[platformId];

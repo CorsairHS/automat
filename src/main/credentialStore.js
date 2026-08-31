@@ -51,10 +51,6 @@ function decryptFields(storedFields) {
   return result;
 }
 
-/**
- * Zwraca liste kont (odszyfrowanych) dla danej platformy.
- * Kazdy account: { accountId, label, city, company, periodMode, periodFrom, periodTo, fields: {...} }
- */
 function listAccounts(platformId) {
   const store = readRaw();
   const accounts = store[platformId] || [];
@@ -64,10 +60,6 @@ function listAccounts(platformId) {
   }));
 }
 
-/**
- * Zapisuje konto (nowe lub aktualizacja istniejacego po accountId).
- * Pola oznaczone jako sensitiveFields w konfiguracji platformy sa szyfrowane przed zapisem.
- */
 function saveAccount(platformId, account) {
   const platform = getPlatformConfig(platformId);
   const store = readRaw();

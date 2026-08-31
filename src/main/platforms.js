@@ -1,9 +1,3 @@
-/**
- * Konfiguracja obslugiwanych platform, ustalona na podstawie demo klienta (2026-08-18).
- * loginUrl i szczegoly formularza PartnerTax sa nadal placeholderami do potwierdzenia
- * po uzyskaniu pelnego dostepu do systemu.
- */
-
 const PERIOD_MODES = [
   { id: 'current_week', label: 'Tydzien biezacy' },
   { id: 'previous_week', label: 'Tydzien poprzedni' },
