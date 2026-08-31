@@ -82,4 +82,48 @@ test.describe('Uber resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(mock.state.pageLoadCount).toBeGreaterThan(1);
   });
+
+  test('przycisk "Dalej" nie reaguje za pierwszym razem: syncUberAccount ponawia klikniecie zamiast utknac na kroku 1', async () => {
+    test.setTimeout(60_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, { reportAlreadyExists: true, failForwardClicks: 1 });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.forwardClickCount).toBe(2);
+  });
+
+  test('generowanie raportu zawodzi za pierwszym razem (checkbox organizacji sie nie zaznacza): syncUberAccount ponawia cala sekwencje formularza', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      failGenerateAttempts: 1,
+    });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.dialogOpenCount).toBe(2);
+  });
+
+  test('wiele organizacji: syncUberAccount zaznacza te dopasowana do pola "Firma"', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      organizations: [{ name: 'Unity Drive sp. z o.o.' }, { name: 'DA Investment sp. z o.o.' }],
+    });
+    const account = makeAccount({ company: 'DA Investment' });
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.checkedOrgNames).toEqual(['DA Investment sp. z o.o.']);
+  });
 });

@@ -43,9 +43,8 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
     log('Loguje sie do Bolta...');
     await humanFill(page.locator('#email'), account.fields.email);
     await humanFill(page.locator('#current-password'), account.fields.password);
-    // Jezyk UI zalezy od ustawien przegladarki/konta (widziany zarowno polski, jak i
-    // angielski) - dopasowujemy oba warianty tekstu przycisku.
-    await humanClick(page.getByRole('button', { name: /zaloguj si.|sign in/i }));
+    // Konta partnerow maja UI ustawione na jezyk polski - dopasowujemy tylko polski tekst.
+    await humanClick(page.getByRole('button', { name: /zaloguj si./i }));
 
     const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });
     if (!loggedIn) {
@@ -60,20 +59,24 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
   // otwiera kalendarz react-datepicker (biblioteka standardowa, klasy .react-datepicker__*).
   // Komorki dni maja role="gridcell" i tekst = numer dnia. Wybieramy start, potem koniec
   // zakresu - react-datepicker w trybie zakresu zamyka popup po drugim kliknieciu.
-  // TODO: nawigacja miedzy miesiacami NIE jest obslugiwana - dziala tylko gdy oba dni
-  // (from i to) sa w aktualnie wyswietlanym miesiacu kalendarza (prawdziwe dla "tydzien
-  // biezacy"/"poprzedni" w wiekszosci przypadkow, moze zawiesc przy zakresie niestandardowym
-  // z innego miesiaca lub w pierwszych dniach miesiaca).
+  // Kalendarz przy otwarciu (bez wczesniej wybranej daty) domyslnie wyswietla biezacy
+  // miesiac - nawigujemy stad do miesiaca "from", wybieramy dzien, po czym nawigujemy
+  // dalej do miesiaca "to" (moze byc innym miesiacem niz "from") i wybieramy drugi dzien.
   const dateRangeInput = page.locator('input[placeholder="d MMM - d MMM"]');
   await humanClick(dateRangeInput);
   await humanDelay(300, 700);
+
+  const now = new Date();
+  let displayedMonthIndex = now.getFullYear() * 12 + now.getMonth();
+  displayedMonthIndex = await navigateCalendarToMonth(page, monthIndexOfIsoDate(from), displayedMonthIndex);
   await selectReactDatepickerDay(page, from);
   await humanDelay(300, 600);
+  displayedMonthIndex = await navigateCalendarToMonth(page, monthIndexOfIsoDate(to), displayedMonthIndex);
   await selectReactDatepickerDay(page, to);
   await humanDelay(400, 800);
 
   log('Otwieram menu pobierania i wybieram "Zarobki na kierowce" (CSV)...');
-  await humanClick(page.getByRole('button', { name: /^pobierz$|^download$/i }));
+  await humanClick(page.getByRole('button', { name: /^pobierz$/i }));
   await humanDelay(400, 900);
 
   const [download] = await Promise.all([
@@ -81,8 +84,7 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
     // Pozycje menu NIE maja roli ARIA menuitem, wiec klikamy po unikalnym tekscie opisu
     // ("Eksport CSV danych finansowych kierowcy") - w odroznieniu od samego tytulu
     // "Zarobki na kierowce", ten tekst nie koliduje z niczym innym na stronie (m.in. z
-    // naglowkiem <h1> strony, ktory ma identyczna tresc). TODO: angielski tekst opisu
-    // nie zostal jeszcze zaobserwowany na zywo.
+    // naglowkiem <h1> strony, ktory ma identyczna tresc).
     humanClick(page.getByText(/eksport csv danych finansowych kierowcy/i)),
   ]);
 
@@ -92,6 +94,27 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
 
   await page.close();
   return { filePath };
+}
+
+/** Zwraca indeks miesiaca (rok*12+miesiac) daty ISO "YYYY-MM-DD", do porownywania miesiecy. */
+function monthIndexOfIsoDate(isoDate) {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  return date.getUTCFullYear() * 12 + date.getUTCMonth();
+}
+
+/**
+ * Klika strzalke "poprzedni"/"nastepny" miesiac kalendarza react-datepicker az wyswietlany
+ * miesiac (sledzony lokalnie, bez odczytu zlokalizowanej nazwy miesiaca z DOM) zrowna sie
+ * z docelowym. Zwraca nowy, aktualny indeks wyswietlanego miesiaca.
+ */
+async function navigateCalendarToMonth(page, targetMonthIndex, currentMonthIndex) {
+  const diff = targetMonthIndex - currentMonthIndex;
+  const selector = diff >= 0 ? '.react-datepicker__navigation--next' : '.react-datepicker__navigation--previous';
+  for (let i = 0; i < Math.abs(diff); i += 1) {
+    await humanClick(page.locator(selector));
+    await humanDelay(150, 350);
+  }
+  return targetMonthIndex;
 }
 
 /** Klika komorke dnia w otwartym kalendarzu react-datepicker (zaklada, ze miesiac juz jest widoczny). */

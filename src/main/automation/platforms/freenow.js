@@ -17,7 +17,8 @@ const LOGIN_URL = 'https://portal.free-now.com/login';
  * jesli sie pojawi, ale nie blokujemy na niej flow).
  * Przeplyw wg demo klienta: Zarobki > okres: tydzien biezacy > pobierz >
  * WAZNE - wybrac wariant pliku "WITH VAT" (platforma oferuje kilka wariantow).
- * Krok pobierania raportu NIE zostal jeszcze zweryfikowany - nadal TODO.
+ * Krok pobierania raportu zweryfikowany na zywo (2026-08-18/19/25, patrz komentarze
+ * przy implementacji nizej).
  *
  * Uwaga: istniejaca wtyczka (novapartner/wtyczka) przechwytuje token Bearer i
  * odtwarza wywolania API FreeNow zamiast klikac w UI - to podejscie jest

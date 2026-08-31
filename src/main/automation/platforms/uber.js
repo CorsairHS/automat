@@ -48,12 +48,33 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
 
     log('Loguje sie do Ubera (krok 1/2: email)...');
     const emailInput = page.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS');
+    const passwordInput = page.locator('#PASSWORD');
     await humanFill(emailInput, account.fields.email);
-    await clickContinueButton(emailInput);
+    // Klikniecie "Dalej" bywa "polykane" (np. strona jeszcze nie w pelni podpieta pod
+    // handler, chwilowa nakladka) - w odroznieniu od kroku 2 (ponizej), ponawianie tego
+    // klikniecia jest bezpieczne: to czysto kliencka zmiana widoku (krok 1 -> krok 2),
+    // bez zadnego zadania do backendu, wiec wielokrotne klikniecie przed faktycznym
+    // przejsciem nie ma skutkow ubocznych.
+    const STEP1_ATTEMPTS = 3;
+    let step1Advanced = false;
+    for (let attempt = 1; attempt <= STEP1_ATTEMPTS; attempt += 1) {
+      await dismissChatBubble(page);
+      await clickContinueButton(emailInput);
+      // isVisible({timeout}) NIE odpytuje/nie czeka mimo timeoutu - to pojedyncze,
+      // natychmiastowe sprawdzenie. waitFor() faktycznie polluje az stan sie pojawi.
+      step1Advanced = await passwordInput.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+      if (step1Advanced) break;
+      if (attempt < STEP1_ATTEMPTS) {
+        log(`Krok logowania (email) nie przeszedl dalej - ponawiam klikniecie "Dalej" (${attempt}/${STEP1_ATTEMPTS})...`);
+      }
+    }
+    if (!step1Advanced) {
+      throw new Error('Logowanie do Ubera utknelo na kroku 1 (pole hasla nie pojawilo sie) mimo kilku prob klikniecia "Dalej".');
+    }
 
     log('Loguje sie do Ubera (krok 2/2: haslo)...');
-    const passwordInput = page.locator('#PASSWORD');
     await humanFill(passwordInput, account.fields.password);
+    await dismissChatBubble(page);
     await clickContinueButton(passwordInput);
 
     const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });

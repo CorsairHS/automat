@@ -23,6 +23,8 @@ function buildAppHtml(state, options) {
     fromSlash,
     toSlash,
     popupAfterDateSelection,
+    organizations = [{ name: 'Unity Drive sp. z o.o.' }],
+    failGenerateAttempts = 0,
   } = options;
 
   const existingRows = state.reportReady
@@ -99,10 +101,14 @@ function buildAppHtml(state, options) {
         <input placeholder="Select organizations to include in report" readonly id="org-input" />
       </span>
       <div id="org-popover" style="display:none">
-        <label data-baseweb="checkbox">
-          <input type="checkbox" id="org-checkbox-0" />
-          Unity Drive sp. z o.o.
-        </label>
+        ${organizations
+          .map(
+            (org, i) => `<label data-baseweb="checkbox">
+          <input type="checkbox" id="org-checkbox-${i}" />
+          ${org.name}
+        </label>`
+          )
+          .join('\n')}
       </div>
 
       <button id="generate-submit-button">Generate</button>
@@ -115,11 +121,16 @@ function buildAppHtml(state, options) {
 
   <script>
     (function () {
-      var state = { step: ${state.loggedIn ? "'loggedIn'" : "'step1'"}, dateSelections: 0 };
+      var state = { step: ${state.loggedIn ? "'loggedIn'" : "'step1'"}, dateSelections: 0, dialogOpenCount: 0 };
 
       document.getElementById('forward-button').addEventListener('click', function () {
-        document.getElementById('login-step1').style.display = 'none';
-        document.getElementById('login-step2').style.display = '';
+        fetch('/api/mock/forward-click', { method: 'POST' })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (!data.transition) return;
+            document.getElementById('login-step1').style.display = 'none';
+            document.getElementById('login-step2').style.display = '';
+          });
       });
 
       document.getElementById('login-step2-form').addEventListener('submit', function (e) {
@@ -140,6 +151,8 @@ function buildAppHtml(state, options) {
       });
 
       document.querySelector('[data-tracking-name="report-generation-initiated"]').addEventListener('click', function () {
+        state.dialogOpenCount += 1;
+        fetch('/api/mock/dialog-open', { method: 'POST' });
         document.getElementById('generate-dialog').style.display = '';
       });
 
@@ -187,6 +200,23 @@ function buildAppHtml(state, options) {
 
       document.getElementById('org-trigger-wrap').addEventListener('click', function () {
         document.getElementById('org-popover').style.display = '';
+      });
+
+      Array.prototype.forEach.call(document.querySelectorAll('#org-popover input[type="checkbox"]'), function (cb) {
+        cb.addEventListener('click', function (e) {
+          // Symuluje przejsciowy problem UI ("polkniete" klikniecie) - checkbox nie
+          // zaznacza sie mimo klikniecia, dopoki dialog nie zostal otwarty ponownie
+          // wystarczajaco duzo razy. Uzywane do przetestowania retry w
+          // generateUberReportWithRetry.
+          if (state.dialogOpenCount <= ${failGenerateAttempts}) {
+            e.preventDefault();
+          }
+        });
+        cb.addEventListener('change', function () {
+          if (cb.checked) {
+            fetch('/api/mock/org-checked', { method: 'POST', body: cb.closest('label').textContent.trim() });
+          }
+        });
       });
 
       document.addEventListener('keydown', function (e) {
@@ -248,6 +278,9 @@ async function installUberMock(context, scenario = {}) {
     reportAlreadyExists = false,
     requireReloadForDownloadReady = false,
     popupAfterDateSelection = false,
+    failForwardClicks = 0,
+    failGenerateAttempts = 0,
+    organizations,
     csvContent = 'data,column\n1,2\n',
   } = scenario;
 
@@ -258,6 +291,9 @@ async function installUberMock(context, scenario = {}) {
     pageLoadCount: 0,
     generatedAtLoadCount: -1,
     popupDismissedCount: 0,
+    forwardClickCount: 0,
+    dialogOpenCount: 0,
+    checkedOrgNames: [],
   };
 
   const options = {
@@ -267,6 +303,8 @@ async function installUberMock(context, scenario = {}) {
     fromSlash: scenario.fromSlash || '2026/08/05',
     toSlash: scenario.toSlash || '2026/08/07',
     popupAfterDateSelection,
+    failGenerateAttempts,
+    ...(organizations ? { organizations } : {}),
   };
 
   await context.route('**/*', (route) => route.abort('blockedbyclient'));
@@ -274,6 +312,12 @@ async function installUberMock(context, scenario = {}) {
   await context.route('https://supplier.uber.com/**', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
+
+    if (url.pathname === '/api/mock/forward-click' && method === 'POST') {
+      state.forwardClickCount += 1;
+      const transition = state.forwardClickCount > failForwardClicks;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ transition }) });
+    }
 
     if (url.pathname === '/api/mock/login' && method === 'POST') {
       state.loggedIn = true;
@@ -288,6 +332,16 @@ async function installUberMock(context, scenario = {}) {
 
     if (url.pathname === '/api/mock/popup-dismissed' && method === 'POST') {
       state.popupDismissedCount += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    }
+
+    if (url.pathname === '/api/mock/dialog-open' && method === 'POST') {
+      state.dialogOpenCount += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    }
+
+    if (url.pathname === '/api/mock/org-checked' && method === 'POST') {
+      state.checkedOrgNames.push(await route.request().postData());
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     }
 

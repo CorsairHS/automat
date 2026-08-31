@@ -76,4 +76,37 @@ test.describe('Bolt resilience', () => {
 
     expect(fs.existsSync(result.filePath)).toBe(true);
   });
+
+  test('zakres dat w miesiacu innym niz biezacy: kalendarz nawiguje do wlasciwego miesiaca zamiast wybrac zly dzien', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installBoltMock(context, { startLoggedIn: true });
+
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setDate(1);
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    const isoMonth = `${twoMonthsAgo.getFullYear()}-${String(twoMonthsAgo.getMonth() + 1).padStart(2, '0')}`;
+    const account = makeAccount({ periodFrom: `${isoMonth}-03`, periodTo: `${isoMonth}-05` });
+
+    const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.getNavigationClickCount()).toBe(2);
+  });
+
+  test('zakres dat na przelomie dwoch miesiecy: kalendarz nawiguje ponownie miedzy wyborem "od" i "do"', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installBoltMock(context, { startLoggedIn: true });
+
+    const today = new Date();
+    const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const lastDayThisMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const from = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(lastDayThisMonth).padStart(2, '0')}`;
+    const to = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-03`;
+    const account = makeAccount({ periodFrom: from, periodTo: to });
+
+    const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.getNavigationClickCount()).toBe(1);
+  });
 });

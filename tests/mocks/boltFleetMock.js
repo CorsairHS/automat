@@ -25,30 +25,69 @@ function buildLoginHtml({ expectedEmail, expectedPassword, reportUrl }) {
 }
 
 function buildReportHtml({ csvFileName, loginUrl }) {
-  const dayCells = Array.from({ length: 31 }, (_, i) => i + 1)
-    .map((day) => `<div class="react-datepicker__day">${day}</div>`)
-    .join('');
-
   return `<!doctype html>
 <html>
 <body>
   <input placeholder="d MMM - d MMM" readonly />
-  <div id="calendar" style="display:none">${dayCells}</div>
-  <button>Pobierz</button>
+  <div id="calendar" style="display:none">
+    <button class="react-datepicker__navigation--previous">Poprzedni</button>
+    <button class="react-datepicker__navigation--next">Nastepny</button>
+    <div id="days"></div>
+  </div>
+  <button id="pobierz-button">Pobierz</button>
   <div id="download-menu" style="display:none">
     <div id="csv-menu-item">Eksport CSV danych finansowych kierowcy</div>
   </div>
   <script>
+    const today = new Date();
+    let displayedYear = today.getFullYear();
+    let displayedMonth = today.getMonth();
+
+    function daysInMonth(year, month) {
+      return new Date(year, month + 1, 0).getDate();
+    }
+
+    function renderDays() {
+      const container = document.getElementById('days');
+      container.innerHTML = '';
+      const count = daysInMonth(displayedYear, displayedMonth);
+      for (let d = 1; d <= count; d += 1) {
+        const cell = document.createElement('div');
+        cell.className = 'react-datepicker__day';
+        cell.textContent = String(d);
+        container.appendChild(cell);
+      }
+    }
+    renderDays();
+
     let selectedCount = 0;
     document.querySelector('input').addEventListener('click', () => {
       document.getElementById('calendar').style.display = 'block';
     });
-    document.getElementById('calendar').addEventListener('click', (e) => {
+
+    async function reportNav(direction) {
+      await fetch('/api/nav-click', { method: 'POST', body: direction });
+    }
+
+    document.querySelector('.react-datepicker__navigation--next').addEventListener('click', async () => {
+      displayedMonth += 1;
+      if (displayedMonth > 11) { displayedMonth = 0; displayedYear += 1; }
+      renderDays();
+      await reportNav('next');
+    });
+    document.querySelector('.react-datepicker__navigation--previous').addEventListener('click', async () => {
+      displayedMonth -= 1;
+      if (displayedMonth < 0) { displayedMonth = 11; displayedYear -= 1; }
+      renderDays();
+      await reportNav('previous');
+    });
+
+    document.getElementById('days').addEventListener('click', (e) => {
       if (!e.target.classList.contains('react-datepicker__day')) return;
       selectedCount += 1;
       if (selectedCount >= 2) document.getElementById('calendar').style.display = 'none';
     });
-    document.querySelector('button').addEventListener('click', () => {
+    document.getElementById('pobierz-button').addEventListener('click', () => {
       document.getElementById('download-menu').style.display = 'block';
     });
     document.getElementById('csv-menu-item').addEventListener('click', async () => {
@@ -93,6 +132,7 @@ async function installBoltMock(context, scenario = {}) {
   const loginUrl = `https://fleets.bolt.eu${loginPath}`;
 
   let loginRequestCount = 0;
+  let navigationClickCount = 0;
 
   await context.route('**/*', (route) => route.abort('blockedbyclient'));
 
@@ -131,6 +171,11 @@ async function installBoltMock(context, scenario = {}) {
       });
     }
 
+    if (url.pathname === '/api/nav-click') {
+      navigationClickCount += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    }
+
     if (url.pathname === '/api/csv-export') {
       if (expireAfterDateSelected) {
         return route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
@@ -145,6 +190,7 @@ async function installBoltMock(context, scenario = {}) {
     reportUrl,
     loginUrl,
     getLoginRequestCount: () => loginRequestCount,
+    getNavigationClickCount: () => navigationClickCount,
   };
 }
 
