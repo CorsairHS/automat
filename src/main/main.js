@@ -5,6 +5,23 @@ const credentialStore = require('./credentialStore');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
 const { readSessionState, writeSessionState } = require('./automation/browserSession');
+const { autoUpdater } = require('electron-updater');
+const logger = require('./logger');
+
+autoUpdater.on('checking-for-update', () => logger.info('[update] sprawdzam dostepnosc aktualizacji...'));
+autoUpdater.on('update-available', (info) => logger.info(`[update] dostepna nowa wersja: ${info.version}`));
+autoUpdater.on('update-not-available', () => logger.info('[update] aplikacja jest aktualna.'));
+autoUpdater.on('update-downloaded', (info) => {
+  logger.info(`[update] pobrano wersje ${info.version} - zostanie zainstalowana przy nastepnym uruchomieniu aplikacji.`);
+});
+autoUpdater.on('error', (error) => logger.error(`[update] blad: ${error.stack || error.message}`));
+
+process.on('uncaughtException', (error) => {
+  logger.error(`Nieobsluzony wyjatek: ${error.stack || error.message}`);
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error(`Nieobsluzone odrzucenie Promise: ${reason instanceof Error ? reason.stack || reason.message : reason}`);
+});
 
 let mainWindow;
 //commit
@@ -28,8 +45,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  logger.init(app.getPath('userData'));
+  logger.info('Aplikacja wystartowala.');
+
   if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('safeStorage encryption is not available on this system - credentials would be stored unencrypted.');
+    logger.warn('safeStorage encryption niedostepne na tym systemie - dane logowania bylyby zapisywane bez szyfrowania.');
   }
 
   createWindow();
@@ -37,6 +57,12 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // Sprawdzanie aktualizacji tylko dla spakowanej apki - w trybie dev (npm start) nie ma
+  // wygenerowanych metadanych update'u i electron-updater i tak by od razu zglosil blad.
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify();
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -82,10 +108,13 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
     return { ok: false, error: 'Nie znaleziono konta.' };
   }
 
+  const logPrefix = `[sync ${platformId}:${account.label || accountId}]`;
   const statusCallback = (message) => {
+    logger.info(`${logPrefix} ${message}`);
     event.sender.send('sync:status', { platformId, accountId, message });
   };
 
+  logger.info(`${logPrefix} start`);
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
     lastDownloads.set(`${platformId}:${accountId}`, {
@@ -96,8 +125,10 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
       filePath: result.filePath,
       downloadedAt: new Date().toISOString(),
     });
+    logger.info(`${logPrefix} sukces: ${result.filePath}`);
     return { ok: true, filePath: result.filePath };
   } catch (error) {
+    logger.error(`${logPrefix} blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
   }
 });
@@ -120,14 +151,18 @@ ipcMain.handle('upload:run', async (event) => {
   }
 
   const statusCallback = (message) => {
+    logger.info(`[upload] ${message}`);
     event.sender.send('upload:status', { message });
   };
 
+  logger.info(`[upload] start, plikow: ${uploads.length}`);
   try {
     await runUpload(app.getPath('userData'), partnertaxAccount, uploads, { statusCallback });
     lastDownloads.clear();
+    logger.info(`[upload] sukces, wgrano: ${uploads.length}`);
     return { ok: true, count: uploads.length };
   } catch (error) {
+    logger.error(`[upload] blad: ${error.stack || error.message}`);
     // Pliki, ktore zdazyly sie wgrac przed bledem, sa juz trwale zapisane w PartnerTax -
     // wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich drugi raz
     // (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
@@ -226,13 +261,17 @@ ipcMain.handle('reports:delete', async (event) => {
   }
 
   const statusCallback = (message) => {
+    logger.info(`[delete] ${message}`);
     event.sender.send('delete:status', { message });
   };
 
+  logger.info('[delete] start');
   try {
     const result = await runDeleteReports(app.getPath('userData'), partnertaxAccount, { statusCallback });
+    logger.info(`[delete] sukces, usunieto: ${result.deletedCount}`);
     return { ok: true, count: result.deletedCount, diagnostics: result.diagnostics };
   } catch (error) {
+    logger.error(`[delete] blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
   }
 });

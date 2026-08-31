@@ -1,6 +1,6 @@
 {
   "name": "partnertax-automat",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Lokalny automat do pobierania raportow z Uber/Bolt/Freenow i wgrywania ich do PartnerTax admin",
   "main": "src/main/main.js",
   "scripts": {
@@ -11,12 +11,16 @@
     "postbuild:mac": "find dist -maxdepth 2 -name '*.app' -exec xattr -cr {} \\; -exec codesign --force --deep --sign - {} \\;",
     "install:mac": "npm run build:mac && rm -rf \"/Applications/PartnerTax Automat.app\" && cp -R \"$(find dist -maxdepth 2 -name '*.app' | head -1)\" /Applications/ && echo 'Zainstalowano w /Applications'",
     "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux"
+    "build:linux": "electron-builder --linux",
+    "release:win": "electron-builder --win --publish always",
+    "release:mac": "electron-builder --mac --publish always",
+    "release:linux": "electron-builder --linux --publish always"
   },
   "author": "PartnerTax",
   "license": "UNLICENSED",
   "dependencies": {
     "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.9",
     "extract-zip": "^2.0.1",
     "playwright": "^1.47.0"
   },
@@ -35,6 +39,11 @@
     ],
     "directories": {
       "output": "dist"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "CorsairHS",
+      "repo": "automat-releases"
     },
     "mac": {
       "category": "public.app-category.business",
