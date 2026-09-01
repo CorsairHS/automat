@@ -15,4 +15,26 @@ function getIsoWeekMonday(year, week) {
   return monday;
 }
 
-module.exports = { getIsoWeekMonday };
+const POLISH_DIACRITICS = { ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n', ó: 'o', ś: 's', ź: 'z', ż: 'z' };
+
+function normalizeForCompare(text) {
+  return text
+    .toLowerCase()
+    .replace(/[ąćęłńóśźż]/g, (ch) => POLISH_DIACRITICS[ch])
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function companiesMatch(fileCompany, accountCompany) {
+  if (!fileCompany) return true;
+  const a = normalizeForCompare(fileCompany);
+  const b = normalizeForCompare(accountCompany || '');
+  if (!b) return true;
+  return a.includes(b) || b.includes(a);
+}
+
+function labelMatchesCity(label, city) {
+  if (!label || !city) return true;
+  return normalizeForCompare(label).includes(normalizeForCompare(city));
+}
+
+module.exports = { getIsoWeekMonday, normalizeForCompare, companiesMatch, labelMatchesCity };
