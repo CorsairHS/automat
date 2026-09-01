@@ -190,4 +190,81 @@ test.describe('validateDownloadedReport', () => {
     const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'niespodziewany_format.csv');
     expect(() => validateDownloadedReport({ platformId: 'bolt', account: baseAccount(), filePath })).toThrow(ReportValidationError);
   });
+
+  test('nierozpoznana platforma blokuje upload', () => {
+    const filePath = path.join('C:', 'downloads', 'nowaplatforma', 'x', 'cokolwiek.csv');
+    expect(() => validateDownloadedReport({ platformId: 'nowaplatforma', account: baseAccount(), filePath }))
+      .toThrow(ReportValidationError);
+  });
+
+  // Bolt Food: brak wyboru zakresu dat przy pobieraniu (platforma generuje raporty
+  // tygodniowe automatycznie w tle) - walidator zawsze porownuje z "tydzien poprzedni"
+  // wzgledem "teraz", NIEZALEZNIE od periodMode/periodFrom/periodTo skonfigurowanych
+  // na koncie. Ponizsze testy budowane sa dynamicznie wzgledem biezacej daty, aby nie
+  // psuly sie z uplywem czasu (nie hardkodujemy konkretnego numeru tygodnia).
+  test.describe('Bolt Food: specjalne traktowanie okresu (ignoruje periodMode konta)', () => {
+    // Znajduje rok/numer tygodnia ISO odpowiadajacy danemu poniedzialkowi, uzywajac
+    // TEJ SAMEJ logiki co parseBoltFoodFilename (getIsoWeekMonday), zeby test byl
+    // niezalezny od jakiejkolwiek innej, potencjalnie niespojnej implementacji ISO-tygodni.
+    function findYearWeekForMonday(mondayIso) {
+      const year = Number(mondayIso.slice(0, 4));
+      for (const y of [year - 1, year, year + 1]) {
+        for (let week = 1; week <= 53; week++) {
+          const candidate = getIsoWeekMonday(y, week);
+          if (toISODate(candidate) === mondayIso) {
+            return { year: y, week };
+          }
+        }
+      }
+      throw new Error(`Nie znaleziono roku/tygodnia ISO dla poniedzialku ${mondayIso}`);
+    }
+
+    function boltFoodFilenameForMonday(mondayIso) {
+      const { year, week } = findYearWeekForMonday(mondayIso);
+      return `fleet_courier_earnings_and_balances_${year}_W${week}.csv`;
+    }
+
+    test('przepuszcza plik z "tygodnia poprzedniego" mimo periodMode="current_week" na koncie', () => {
+      const previousWeek = require('../src/main/automation/dateRange').computePeriodRange({ periodMode: 'previous_week' });
+      const filename = boltFoodFilenameForMonday(previousWeek.from);
+      const filePath = path.join('C:', 'downloads', 'boltfood', 'x', filename);
+      expect(() => validateDownloadedReport({
+        platformId: 'boltfood',
+        account: baseAccount({ periodMode: 'current_week' }),
+        filePath,
+      })).not.toThrow();
+    });
+
+    test('przepuszcza ten sam plik niezaleznie od periodMode konta (custom vs current_week)', () => {
+      const previousWeek = require('../src/main/automation/dateRange').computePeriodRange({ periodMode: 'previous_week' });
+      const filename = boltFoodFilenameForMonday(previousWeek.from);
+      const filePath = path.join('C:', 'downloads', 'boltfood', 'x', filename);
+
+      expect(() => validateDownloadedReport({
+        platformId: 'boltfood',
+        account: baseAccount({ periodMode: 'custom', periodFrom: '2000-01-01', periodTo: '2000-01-07' }),
+        filePath,
+      })).not.toThrow();
+
+      expect(() => validateDownloadedReport({
+        platformId: 'boltfood',
+        account: baseAccount({ periodMode: 'current_week' }),
+        filePath,
+      })).not.toThrow();
+    });
+
+    test('blokuje plik sprzed dwoch tygodni (nie "tydzien poprzedni")', () => {
+      const previousWeek = require('../src/main/automation/dateRange').computePeriodRange({ periodMode: 'previous_week' });
+      const [y, m, d] = previousWeek.from.split('-').map(Number);
+      const twoWeeksAgoMonday = new Date(y, m - 1, d);
+      twoWeeksAgoMonday.setDate(twoWeeksAgoMonday.getDate() - 7);
+      const filename = boltFoodFilenameForMonday(toISODate(twoWeeksAgoMonday));
+      const filePath = path.join('C:', 'downloads', 'boltfood', 'x', filename);
+      expect(() => validateDownloadedReport({
+        platformId: 'boltfood',
+        account: baseAccount({ periodMode: 'current_week' }),
+        filePath,
+      })).toThrow(ReportValidationError);
+    });
+  });
 });

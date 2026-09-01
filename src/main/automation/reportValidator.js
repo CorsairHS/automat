@@ -121,11 +121,25 @@ function validateDownloadedReport({ platformId, account, filePath }) {
     );
   }
 
-  const expected = computePeriodRange({
-    periodMode: account.periodMode,
-    periodFrom: account.periodFrom,
-    periodTo: account.periodTo,
-  });
+  // Bolt Food nie ma wyboru zakresu dat przy pobieraniu - platforma sama generuje
+  // raporty tygodniowe wg wlasnego harmonogramu, a aplikacja pobiera "najnowszy
+  // opublikowany wiersz" tego typu (patrz komentarz w platforms/boltfood.js). W
+  // stabilnym cyklu dzialania oznacza to, ze najnowszy opublikowany kompletny
+  // tydzien to zawsze tydzien poprzedzajacy biezacy (Bolt Food nie publikuje
+  // jeszcze niezakonczonego tygodnia biezacego). Dlatego dla tej platformy zawsze
+  // porownujemy z "tydzien poprzedni" wzgledem "teraz", ignorujac
+  // periodMode/periodFrom/periodTo skonfigurowane na koncie - te ustawienia
+  // odnosza sie do wyboru zakresu w GUI, ktorego Bolt Food strukturalnie nie ma.
+  // Nadal chroni to przed uploadem nieaktualnego/zlego raportu (np. sprzed wielu
+  // tygodni przez blad sesji), tylko bez twardego blokowania normalnej,
+  // dzialajacej pracy platformy.
+  const expected = platformId === 'boltfood'
+    ? computePeriodRange({ periodMode: 'previous_week' })
+    : computePeriodRange({
+        periodMode: account.periodMode,
+        periodFrom: account.periodFrom,
+        periodTo: account.periodTo,
+      });
 
   if (parsed.periodStart !== expected.from || parsed.periodEnd !== expected.to) {
     throw new ReportValidationError(
