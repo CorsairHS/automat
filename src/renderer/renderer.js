@@ -29,6 +29,16 @@ let downloadAllStatusElement = null;
 // Pobierz teraz) i partner nie wracal za kazdym razem do pierwszej zakladki.
 let activePlatformId = null;
 
+// Nadrzedny widok (Konta / Aktualizacje) - osobny od activePlatformId, bo "Aktualizacje"
+// to nie platforma z kontami, tylko niezalezna sekcja przelaczana obok calego
+// dotychczasowego UI (patrz renderMainTabs).
+let activeMainView = 'accounts';
+let updateStatusTextElement = null;
+let updateVersionElement = null;
+let checkUpdateButton = null;
+let installUpdateButton = null;
+let latestUpdateState = { state: 'idle', message: '' };
+
 // Znacznik uzywany przez glowny proces (patrz loginHelpers.js) do oznaczenia
 // jedynego momentu, w ktorym partner moze bezpiecznie recznie kliknac w oknie
 // przegladarki (uzupelnienie kodu 2FA) - poza tym momentem automat steruje ta sama
@@ -54,6 +64,22 @@ window.api.onUploadStatus(({ message }) => {
 window.api.onDeleteStatus(({ message }) => {
   applyStatusMessage(deleteStatusElement, message);
 });
+
+window.api.onUpdateStatus((payload) => {
+  latestUpdateState = payload;
+  applyUpdateState();
+});
+
+function applyUpdateState() {
+  if (!updateStatusTextElement) return;
+  updateStatusTextElement.textContent = latestUpdateState.message || '';
+  if (checkUpdateButton) {
+    checkUpdateButton.disabled = latestUpdateState.state === 'checking' || latestUpdateState.state === 'downloading';
+  }
+  if (installUpdateButton) {
+    installUpdateButton.style.display = latestUpdateState.state === 'downloaded' ? '' : 'none';
+  }
+}
 
 async function render() {
   CONFIG = await window.api.getPlatformsConfig();
@@ -103,6 +129,98 @@ async function render() {
   renderUploadSection();
   renderDeleteSection();
   renderSessionTransferSection();
+}
+
+/**
+ * Nadrzedny pasek zakladek "Konta" / "Aktualizacje" - przelacza widocznosc calego
+ * dotychczasowego UI (#platform-list, budowany przez render()) i nowej, niezaleznej
+ * sekcji aktualizacji (#updates-view, patrz renderUpdatesSection). W przeciwienstwie do
+ * renderPlatformTabs ten pasek buduje sie raz przy starcie apki (nie przy kazdym render()),
+ * bo nie zalezy od CONFIG/kont.
+ */
+function renderMainTabs() {
+  const tabBar = document.getElementById('main-tabs');
+  tabBar.innerHTML = '';
+  tabBar.className = 'platform-tabs';
+
+  const tabs = [
+    { id: 'accounts', label: 'Konta' },
+    { id: 'updates', label: 'Aktualizacje' },
+  ];
+
+  for (const tab of tabs) {
+    const tabBtn = document.createElement('button');
+    tabBtn.type = 'button';
+    tabBtn.className = 'platform-tab' + (tab.id === activeMainView ? ' active' : '');
+    tabBtn.textContent = tab.label;
+    tabBtn.onclick = () => {
+      activeMainView = tab.id;
+      for (const btn of tabBar.querySelectorAll('.platform-tab')) {
+        btn.classList.toggle('active', btn === tabBtn);
+      }
+      document.getElementById('platform-list').style.display = tab.id === 'accounts' ? '' : 'none';
+      document.getElementById('updates-view').style.display = tab.id === 'updates' ? '' : 'none';
+    };
+    tabBar.appendChild(tabBtn);
+  }
+}
+
+/**
+ * Zakladka "Aktualizacje": biezaca wersja apki, status ostatniego sprawdzenia
+ * (przekazywany na zywo z autoUpdatera w main.js - patrz onUpdateStatus wyzej) i dwa
+ * przyciski - reczne sprawdzenie oraz instalacja juz pobranej aktualizacji. Buduje sie raz
+ * przy starcie, bez zaleznosci od CONFIG/kont, wiec nie jest czescia render().
+ */
+async function renderUpdatesSection() {
+  const container = document.getElementById('updates-view');
+  container.innerHTML = '';
+
+  const section = document.createElement('section');
+  section.className = 'platform-section';
+
+  const header = document.createElement('h2');
+  header.textContent = 'Aktualizacje';
+  section.appendChild(header);
+
+  const card = document.createElement('div');
+  card.className = 'platform-card';
+
+  updateVersionElement = document.createElement('p');
+  updateVersionElement.className = 'platform-note';
+  updateVersionElement.textContent = `Zainstalowana wersja: ${await window.api.getAppVersion()}`;
+  card.appendChild(updateVersionElement);
+
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+
+  checkUpdateButton = document.createElement('button');
+  checkUpdateButton.className = 'btn-secondary';
+  checkUpdateButton.textContent = 'Sprawdz teraz';
+  checkUpdateButton.onclick = async () => {
+    const result = await window.api.checkForUpdate();
+    if (!result.ok) {
+      latestUpdateState = { state: 'error', message: result.error };
+      applyUpdateState();
+    }
+  };
+  runRow.appendChild(checkUpdateButton);
+
+  installUpdateButton = document.createElement('button');
+  installUpdateButton.className = 'btn-run';
+  installUpdateButton.textContent = 'Zainstaluj teraz';
+  installUpdateButton.style.display = 'none';
+  installUpdateButton.onclick = () => window.api.installUpdate();
+  runRow.appendChild(installUpdateButton);
+
+  updateStatusTextElement = document.createElement('span');
+  updateStatusTextElement.className = 'run-status';
+  runRow.appendChild(updateStatusTextElement);
+
+  card.appendChild(runRow);
+  section.appendChild(card);
+  container.appendChild(section);
+
+  applyUpdateState();
 }
 
 /**
@@ -740,3 +858,6 @@ function renderPeriodSelector(account, platform) {
 }
 
 render();
+
+renderMainTabs();
+renderUpdatesSection();

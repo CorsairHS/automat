@@ -31,4 +31,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('delete:status', listener);
     return () => ipcRenderer.removeListener('delete:status', listener);
   },
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  checkForUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
 });

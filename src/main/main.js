@@ -8,13 +8,33 @@ const { readSessionState, writeSessionState } = require('./automation/browserSes
 const { autoUpdater } = require('electron-updater');
 const logger = require('./logger');
 
-autoUpdater.on('checking-for-update', () => logger.info('[update] sprawdzam dostepnosc aktualizacji...'));
-autoUpdater.on('update-available', (info) => logger.info(`[update] dostepna nowa wersja: ${info.version}`));
-autoUpdater.on('update-not-available', () => logger.info('[update] aplikacja jest aktualna.'));
+// Przekazuje stan autoUpdatera do zakladki "Aktualizacje" w rendererze (patrz
+// renderUpdatesSection w renderer.js) - oprocz logowania do pliku, partner widzi ten sam
+// stan na zywo w oknie aplikacji, zamiast polegac wylacznie na natywnym powiadomieniu OS.
+function sendUpdateStatus(payload) {
+  mainWindow?.webContents.send('update:status', payload);
+}
+
+autoUpdater.on('checking-for-update', () => {
+  logger.info('[update] sprawdzam dostepnosc aktualizacji...');
+  sendUpdateStatus({ state: 'checking', message: 'Sprawdzam dostepnosc aktualizacji...' });
+});
+autoUpdater.on('update-available', (info) => {
+  logger.info(`[update] dostepna nowa wersja: ${info.version}`);
+  sendUpdateStatus({ state: 'downloading', message: `Dostepna nowa wersja ${info.version} - pobieram...`, version: info.version });
+});
+autoUpdater.on('update-not-available', () => {
+  logger.info('[update] aplikacja jest aktualna.');
+  sendUpdateStatus({ state: 'not-available', message: `Masz najnowsza wersje (${app.getVersion()}).` });
+});
 autoUpdater.on('update-downloaded', (info) => {
   logger.info(`[update] pobrano wersje ${info.version} - zostanie zainstalowana przy nastepnym uruchomieniu aplikacji.`);
+  sendUpdateStatus({ state: 'downloaded', message: `Pobrano wersje ${info.version} - gotowe do instalacji.`, version: info.version });
 });
-autoUpdater.on('error', (error) => logger.error(`[update] blad: ${error.stack || error.message}`));
+autoUpdater.on('error', (error) => {
+  logger.error(`[update] blad: ${error.stack || error.message}`);
+  sendUpdateStatus({ state: 'error', message: `Blad sprawdzania aktualizacji: ${error.message}` });
+});
 
 process.on('uncaughtException', (error) => {
   logger.error(`Nieobsluzony wyjatek: ${error.stack || error.message}`);
@@ -60,7 +80,7 @@ app.whenReady().then(() => {
   // Sprawdzanie aktualizacji tylko dla spakowanej apki - w trybie dev (npm start) nie ma
   // wygenerowanych metadanych update'u i electron-updater i tak by od razu zglosil blad.
   if (app.isPackaged) {
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.checkForUpdates();
   }
 });
 
@@ -273,4 +293,23 @@ ipcMain.handle('reports:delete', async (event) => {
     logger.error(`[delete] blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
   }
+});
+
+ipcMain.handle('app:version', () => app.getVersion());
+
+ipcMain.handle('update:check', async () => {
+  if (!app.isPackaged) {
+    return { ok: false, error: 'Sprawdzanie aktualizacji jest dostepne tylko w spakowanej wersji aplikacji.' };
+  }
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true };
+  } catch (error) {
+    logger.error(`[update] blad recznego sprawdzenia: ${error.stack || error.message}`);
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('update:install', () => {
+  autoUpdater.quitAndInstall();
 });
