@@ -1,3 +1,4 @@
+const path = require('path');
 const { test, expect } = require('playwright/test');
 const { getIsoWeekMonday } = require('../src/main/automation/reportValidator');
 const { toISODate } = require('../src/main/automation/dateRange');
@@ -133,5 +134,60 @@ test.describe('parseBoltFoodFilename', () => {
 
   test('rzuca na nierozpoznana nazwe', () => {
     expect(() => parseBoltFoodFilename('raport.csv')).toThrow();
+  });
+});
+
+const { validateDownloadedReport, ReportValidationError } = require('../src/main/automation/reportValidator');
+
+function baseAccount(overrides = {}) {
+  return {
+    label: 'DA Investment - Wrocław',
+    city: 'Wrocław',
+    company: 'DA Investment',
+    periodMode: 'custom',
+    periodFrom: '2026-08-31',
+    periodTo: '2026-09-01',
+    ...overrides,
+  };
+}
+
+test.describe('validateDownloadedReport', () => {
+  test('przepuszcza zgodny plik Bolt', () => {
+    const filePath = path.join('C:', 'downloads', 'bolt', 'DA_Investment_-_Wroc_aw', 'Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
+    expect(() => validateDownloadedReport({ platformId: 'bolt', account: baseAccount(), filePath })).not.toThrow();
+  });
+
+  test('blokuje zly tydzien', () => {
+    const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'Zarobki na kierowcę-24 sie 2026-30 sie 2026-DA INVESTMENT SP_ Z O_O_.csv');
+    expect(() => validateDownloadedReport({ platformId: 'bolt', account: baseAccount(), filePath }))
+      .toThrow(ReportValidationError);
+  });
+
+  test('blokuje zla firme (Uber)', () => {
+    const filePath = path.join('C:', 'downloads', 'uber', 'x', '20260831-20260901-payments_driver-UNITY_DRIVE_SP_Z_O_O.csv');
+    expect(() => validateDownloadedReport({
+      platformId: 'uber',
+      account: baseAccount({ periodMode: 'custom', periodFrom: '2026-08-31', periodTo: '2026-09-01' }),
+      filePath,
+    })).toThrow(ReportValidationError);
+  });
+
+  test('blokuje niespojnosc etykiety konta z miastem', () => {
+    const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
+    expect(() => validateDownloadedReport({
+      platformId: 'bolt',
+      account: baseAccount({ label: 'DA Investment - Warszawa' }),
+      filePath,
+    })).toThrow(ReportValidationError);
+  });
+
+  test('FreeNow: przepuszcza mimo braku firmy w pliku', () => {
+    const filePath = path.join('C:', 'downloads', 'freenow', 'x', 'earnings_2026-08-31_2026-09-01', 'earnings_2026-08-31_2026-09-01_with_VAT.csv');
+    expect(() => validateDownloadedReport({ platformId: 'freenow', account: baseAccount(), filePath })).not.toThrow();
+  });
+
+  test('nierozpoznana nazwa pliku blokuje upload', () => {
+    const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'niespodziewany_format.csv');
+    expect(() => validateDownloadedReport({ platformId: 'bolt', account: baseAccount(), filePath })).toThrow(ReportValidationError);
   });
 });

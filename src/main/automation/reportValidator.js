@@ -1,4 +1,5 @@
-const { toISODate } = require('./dateRange');
+const path = require('path');
+const { toISODate, computePeriodRange } = require('./dateRange');
 
 /**
  * Poniedzialek tygodnia ISO-8601 danego numeru/roku (tydzien 1 = tydzien zawierajacy
@@ -95,6 +96,56 @@ function parseBoltFoodFilename(filename) {
   return { company: null, periodStart: toISODate(monday), periodEnd: toISODate(sunday) };
 }
 
+const PLATFORM_PARSERS = {
+  bolt: parseBoltFilename,
+  uber: parseUberFilename,
+  freenow: parseFreenowFilename,
+  boltfood: parseBoltFoodFilename,
+};
+
+class ReportValidationError extends Error {}
+
+function validateDownloadedReport({ platformId, account, filePath }) {
+  const parser = PLATFORM_PARSERS[platformId];
+  if (!parser) {
+    throw new ReportValidationError(`Brak walidatora nazwy pliku dla platformy: ${platformId}`);
+  }
+
+  const filename = path.basename(filePath);
+  let parsed;
+  try {
+    parsed = parser(filename);
+  } catch (error) {
+    throw new ReportValidationError(
+      `Nie rozpoznano formatu nazwy pobranego pliku (${platformId}): "${filename}". ${error.message}`
+    );
+  }
+
+  const expected = computePeriodRange({
+    periodMode: account.periodMode,
+    periodFrom: account.periodFrom,
+    periodTo: account.periodTo,
+  });
+
+  if (parsed.periodStart !== expected.from || parsed.periodEnd !== expected.to) {
+    throw new ReportValidationError(
+      `Zly tydzien w pobranym pliku (${platformId}, konto "${account.label}"): plik dotyczy ${parsed.periodStart} - ${parsed.periodEnd}, oczekiwano ${expected.from} - ${expected.to}.`
+    );
+  }
+
+  if (!companiesMatch(parsed.company, account.company)) {
+    throw new ReportValidationError(
+      `Zla firma w pobranym pliku (${platformId}, konto "${account.label}"): plik wskazuje na "${parsed.company}", skonfigurowana firma to "${account.company}".`
+    );
+  }
+
+  if (!labelMatchesCity(account.label, account.city)) {
+    throw new ReportValidationError(
+      `Niespojna konfiguracja konta: etykieta "${account.label}" nie zawiera skonfigurowanego miasta "${account.city}". Sprawdz ustawienia konta.`
+    );
+  }
+}
+
 module.exports = {
   getIsoWeekMonday,
   normalizeForCompare,
@@ -104,4 +155,6 @@ module.exports = {
   parseUberFilename,
   parseFreenowFilename,
   parseBoltFoodFilename,
+  ReportValidationError,
+  validateDownloadedReport,
 };
