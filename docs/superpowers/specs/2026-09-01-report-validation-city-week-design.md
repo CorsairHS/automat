@@ -17,15 +17,17 @@ Zapobiec finansowo krytycznemu błędowi: raport trafia do złego miasta w Partn
 - Dopasowanie tygodnia ma być **dokładne**: dla `periodMode = current_week` cały bieżący tydzień (pon-niedz), dla `previous_week` cały poprzedni tydzień — bez marginesu tolerancji.
 - Rozważany alternatywnie pomysł użytkownika (porównanie listy kierowców z poprzednio wgranym raportem z tego samego miasta, oczekiwane ~70% pokrycia) **odrzucony jako mechanizm główny**: nie odróżnia dobrze złego tygodnia od dobrego dla tego samego miasta (sąsiednie tygodnie mają podobny skład kierowców). Zostaje jako możliwe przyszłe rozszerzenie (druga warstwa obrony), poza zakresem tej iteracji.
 - Przy niezgodności: **twarda blokada uploadu**, nie ostrzeżenie z potwierdzeniem — użytkownik wolał wykluczyć ryzyko przypadkowego zatwierdzenia błędnych danych.
+- **Ważne doprecyzowanie wykryte przy pisaniu planu:** nazwa pliku sugerowana przez pobranie (`download.suggestedFilename()`, prawdziwa nazwa z serwera platformy) zawiera zakres dat u wszystkich czterech platform i nazwę firmy u Bolt i Uber — to niezależne dowody z platformy. Miasto natomiast **nie występuje w treści/nazwie żadnego pobranego pliku** — segment "miasta" widoczny w ścieżce pobierania (np. `DA_Investment_-_Wroc_aw`) to nazwa lokalnego folderu utworzona przez nasz kod z `account.label` (`runner.js`, `sanitizeFolderName`), czyli tej samej konfiguracji konta, nie dowód z platformy. Walidacja miasta w tym designie sprawdza więc **spójność `account.label` z `account.city`** (łapie literówkę/pomyłkę przy zakładaniu konta) — świadomie **nie chroni** przed scenariuszem "automat zalogował się/pobrał dane dla złego konta na samej platformie mimo poprawnej lokalnej konfiguracji". Ustalone z użytkownikiem: to świadomy, akceptowalny zakres dla tej iteracji.
 
 ## Zakres
 
-1. Parser nazwy pliku/folderu per platforma (Bolt, Bolt Food, FreeNow, Uber), zwracający `{ city: string | null, periodStart: Date, periodEnd: Date }`. Bolt Food zwraca `city: null` (nie ma go w ścieżce) — walidacja miasta jest wtedy pomijana dla tej platformy, walidacja tygodnia nadal obowiązuje.
-2. Funkcja walidująca, wywoływana zaraz po pobraniu pliku (w `runner.js`, przed dopisaniem wpisu do `lastDownloads`), porównująca dane sparsowane z pliku z:
-   - `account.city` (dopasowanie tekstowe, tolerancyjne na formatowanie/wielkość liter tak samo jak dziś robi to `resolveCityValue`),
-   - zakresem z `computePeriodRange(account.periodMode, ...)` użytym do pobrania tego pliku (dokładna zgodność początku i końca tygodnia).
-3. Przy niezgodności: plik nie trafia do `lastDownloads`, pobieranie dla tego konta kończy się czytelnym błędem (miasto/tydzień oczekiwane vs. znalezione w pliku), zdarzenie trafia do logu aplikacji (istniejący mechanizm logowania do pliku).
-4. Testy jednostkowe parserów nazw plików (na bazie rzeczywistych przykładów z tej sesji, per platforma) + test integracyjny weryfikujący, że niezgodność blokuje upload i generuje odpowiedni błąd.
+1. Parser nazwy pliku (z `download.suggestedFilename()`, prawdziwej nazwy z serwera platformy) per platforma (Bolt, Bolt Food, FreeNow, Uber), zwracający `{ company: string | null, periodStart: Date, periodEnd: Date }`. `company` dostępne tylko dla Bolt i Uber (patrz ustalenia wyżej) — dla FreeNow i Bolt Food zawsze `null`, walidacja firmy jest wtedy pomijana, walidacja tygodnia nadal obowiązuje.
+2. Osobna, prostsza funkcja sprawdzająca spójność konfiguracji konta: czy nazwa miasta zawarta w `account.label` (ta sama wartość, z której `runner.js` tworzy folder pobierania) odpowiada `account.city`. To nie jest parsowanie pliku — to porównanie dwóch pól tego samego rekordu konta.
+3. Funkcja walidująca, wywoływana zaraz po pobraniu pliku (w `runner.js`, przed dopisaniem wpisu do `lastDownloads`), porównująca:
+   - dane sparsowane z nazwy pliku (firma, zakres dat) z `account.company` i zakresem z `computePeriodRange(account.periodMode, ...)` użytym do pobrania tego pliku (dokładna zgodność początku i końca tygodnia; firma — dopasowanie tekstowe tolerancyjne na formatowanie, jak dziś robi `resolveCompanyValue`),
+   - `account.label` z `account.city` (spójność konfiguracji, patrz punkt 2).
+4. Przy niezgodności (dowolnej z powyższych): plik nie trafia do `lastDownloads`, pobieranie dla tego konta kończy się czytelnym błędem (co dokładnie się nie zgadza — oczekiwane vs. znalezione), zdarzenie trafia do logu aplikacji (istniejący mechanizm logowania do pliku).
+5. Testy jednostkowe parserów nazw plików (na bazie rzeczywistych przykładów z tej sesji, per platforma) + test funkcji spójności label/city + test integracyjny weryfikujący, że niezgodność blokuje upload i generuje odpowiedni błąd.
 
 ## Poza zakresem
 
