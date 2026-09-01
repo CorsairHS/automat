@@ -75,7 +75,7 @@ function parseUberFilename(filename) {
 }
 
 function parseFreenowFilename(filename) {
-  const match = filename.match(/earnings_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})/i);
+  const match = filename.match(/^earnings_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})_with_VAT\.csv$/i);
   if (!match) {
     throw new Error(`Nierozpoznany format nazwy pliku FreeNow: "${filename}"`);
   }

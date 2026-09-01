@@ -109,6 +109,14 @@ test.describe('parseFreenowFilename', () => {
   test('rzuca na nierozpoznana nazwe', () => {
     expect(() => parseFreenowFilename('raport.csv')).toThrow();
   });
+
+  test('odrzuca nazwę z zaśmieciającym prefixem (nie CSV)', () => {
+    expect(() => parseFreenowFilename('garbage_earnings_2026-08-31_2026-09-01.exe')).toThrow();
+  });
+
+  test('odrzuca nazwę bez suffixu "_with_VAT.csv"', () => {
+    expect(() => parseFreenowFilename('earnings_2026-08-31_2026-09-01.csv')).toThrow();
+  });
 });
 
 test.describe('parseBoltFoodFilename', () => {
