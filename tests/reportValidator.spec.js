@@ -61,3 +61,69 @@ test.describe('labelMatchesCity', () => {
     expect(labelMatchesCity('DA Investment - Wrocław', 'Warszawa')).toBe(false);
   });
 });
+
+test.describe('parseBoltFilename', () => {
+  const {
+    parseBoltFilename,
+  } = require('../src/main/automation/reportValidator');
+
+  test('parsuje polskie nazwy miesiecy i firme', () => {
+    const result = parseBoltFilename('Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
+    expect(result).toEqual({ company: 'DA INVESTMENT SP_ Z O_O_', periodStart: '2026-08-31', periodEnd: '2026-09-01' });
+  });
+
+  test('rzuca na nierozpoznana nazwe', () => {
+    expect(() => parseBoltFilename('cos_zupelnie_innego.csv')).toThrow();
+  });
+});
+
+test.describe('parseUberFilename', () => {
+  const {
+    parseUberFilename,
+  } = require('../src/main/automation/reportValidator');
+
+  test('parsuje daty YYYYMMDD i firme', () => {
+    const result = parseUberFilename('20260824-20260825-payments_driver-DA_INVESTMENT_SPKA_Z_OGRANICZON_ODPOWIEDZIALNOCI.csv');
+    expect(result).toEqual({
+      company: 'DA_INVESTMENT_SPKA_Z_OGRANICZON_ODPOWIEDZIALNOCI',
+      periodStart: '2026-08-24',
+      periodEnd: '2026-08-25',
+    });
+  });
+
+  test('rzuca na nierozpoznana nazwe', () => {
+    expect(() => parseUberFilename('raport.csv')).toThrow();
+  });
+});
+
+test.describe('parseFreenowFilename', () => {
+  const {
+    parseFreenowFilename,
+  } = require('../src/main/automation/reportValidator');
+
+  test('parsuje zakres dat, brak firmy', () => {
+    const result = parseFreenowFilename('earnings_2026-08-31_2026-09-01_with_VAT.csv');
+    expect(result).toEqual({ company: null, periodStart: '2026-08-31', periodEnd: '2026-09-01' });
+  });
+
+  test('rzuca na nierozpoznana nazwe', () => {
+    expect(() => parseFreenowFilename('raport.csv')).toThrow();
+  });
+});
+
+test.describe('parseBoltFoodFilename', () => {
+  const {
+    parseBoltFoodFilename,
+  } = require('../src/main/automation/reportValidator');
+
+  test('parsuje numer tygodnia ISO na poniedzialek-niedziele, brak firmy', () => {
+    const result = parseBoltFoodFilename('fleet_courier_earnings_and_balances_2026_W34.csv');
+    expect(result.company).toBeNull();
+    expect(result.periodStart).toBe('2026-08-17');
+    expect(result.periodEnd).toBe('2026-08-23');
+  });
+
+  test('rzuca na nierozpoznana nazwe', () => {
+    expect(() => parseBoltFoodFilename('raport.csv')).toThrow();
+  });
+});
