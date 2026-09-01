@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron')
 const credentialStore = require('./credentialStore');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
+const { validateDownloadedReport, ReportValidationError } = require('./automation/reportValidator');
 const { readSessionState, writeSessionState } = require('./automation/browserSession');
 const { autoUpdater } = require('electron-updater');
 const logger = require('./logger');
@@ -136,6 +137,7 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
   logger.info(`${logPrefix} start`);
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
+    validateDownloadedReport({ platformId, account, filePath: result.filePath });
     lastDownloads.set(`${platformId}:${accountId}`, {
       platformId,
       accountId,

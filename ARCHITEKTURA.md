@@ -121,3 +121,22 @@ Przeplyw: `/admin/` login (`#id_username`/`#id_password`) → `/admin/finances/r
 Live test zglosil blad `locator.click: strict mode violation: locator('a[href="/earnings"]') resolved to 2 elements` - przy pierwszym przejsciu przez flow strona (dashboard) ma DWA linki z `href="/earnings"`: link w menu bocznym z tekstem "Zarobki" i osobny link "Szczegoly zarobkow" (np. karta na dashboardzie). Przy kolejnym pobraniu w tej samej sesji dzialalo, bo uzytkownik byl juz na innej podstronie, gdzie tylko jeden z tych linkow istnieje w DOM.
 
 Naprawa w `src/main/automation/platforms/freenow.js`: zamiast selektora po samym `href`, celowanie w link po dokladnym tekscie - `page.getByRole('link', { name: 'Zarobki', exact: true })`. Dziala niezaleznie od tego, z ktorej podstrony flow sie zaczyna.
+
+## ✅ Walidacja raportu przed uploadem: zly tydzien/zla firma/niespojne miasto (2026-09-01)
+
+Realne ryzyko finansowe: raport moglby trafic do zlego miasta w PartnerTax lub zostac
+wgrany dla niewlasciwego tygodnia, bez zadnej weryfikacji. Dodano
+`src/main/automation/reportValidator.js`, wywolywany w `sync:run` (`main.js`) zaraz po
+pobraniu, przed dopisaniem pliku do `lastDownloads`:
+- Tydzien: parsowany z prawdziwej nazwy pliku sugerowanej przez serwer platformy
+  (Bolt/Uber/FreeNow/Bolt Food, kazdy w innym formacie), porownywany dokladnie z
+  `computePeriodRange`.
+- Firma: parsowana z nazwy pliku tylko dla Bolt i Uber (jedyne dwie platformy, ktore ja
+  ujawniaja w nazwie), porownywana z `account.company`.
+- Miasto: NIE wystepuje w zadnym pobranym pliku - walidowana jest za to spojnosc
+  `account.label` z `account.city` w konfiguracji konta (lapie literowke/pomylke przy
+  zakladaniu konta, ale swiadomie nie chroni przed pobraniem danych dla zlego konta na
+  samej platformie - patrz `docs/superpowers/specs/2026-09-01-report-validation-city-week-design.md`).
+
+Kazda niezgodnosc = twarda blokada (plik nie trafia do `lastDownloads`, wiec nie moze
+zostac wgrany), zgodnie z decyzja klienta ("nie chcemy, zeby to cos popsulo").
