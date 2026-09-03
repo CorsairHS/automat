@@ -47,8 +47,12 @@ process.on('unhandledRejection', (reason) => {
 let mainWindow;
 // Ostatni udany download per (platformId, accountId) - zrodlo dla uploadu do
 // PartnerTax admin. Tylko w pamieci procesu (nie trzeba trwalosci miedzy uruchomieniami
-// aplikacji - upload robi sie zaraz po pobraniu).
+// aplikacji - upload robi sie zaraz po pobraniu). Konta z grupy "gwarant" (patrz
+// credentialStore.listAccounts) trafiaja do OSOBNEJ mapy (lastGwarantDownloads), zeby ich
+// pobrania nigdy nie wplynely na wspolna Kontrole pobran/Pobierz wszystkie/wgrywanie do
+// PartnerTax - Gwarant ma byc calkowicie niezaleznym obiegiem.
 const lastDownloads = new Map();
+const lastGwarantDownloads = new Map();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -106,9 +110,9 @@ ipcMain.handle('platforms:config', () => {
   return { platforms: PLATFORMS, periodModes: PERIOD_MODES };
 });
 
-ipcMain.handle('accounts:list', (_event, platformId) => {
+ipcMain.handle('accounts:list', (_event, platformId, group) => {
   const platform = PLATFORMS.find((p) => p.id === platformId);
-  const accounts = credentialStore.listAccounts(platformId);
+  const accounts = credentialStore.listAccounts(platformId, group);
   return accounts.map((account) => maskAccountForRenderer(platform, account));
 });
 
@@ -120,6 +124,27 @@ ipcMain.handle('accounts:save', (_event, platformId, account) => {
 ipcMain.handle('accounts:delete', (_event, platformId, accountId) => {
   credentialStore.deleteAccount(platformId, accountId);
   return { ok: true };
+});
+
+// Duplikuje istniejace konto (dowolnej grupy) do zakladki Gwarant jako NOWY, niezalezny
+// wpis (nowy accountId, group: 'gwarant') - patrz renderer.js przycisk "Dodaj do gwaranta".
+// Po utworzeniu kopia zyje wlasnym zyciem: edycja oryginalu jej nie dotyczy i odwrotnie.
+ipcMain.handle('accounts:duplicateToGuarantor', (_event, platformId, accountId) => {
+  const source = credentialStore.listAccounts(platformId).find((a) => a.accountId === accountId);
+  if (!source) {
+    return { ok: false, error: 'Nie znaleziono konta.' };
+  }
+  const newAccountId = credentialStore.saveAccount(platformId, {
+    label: source.label,
+    city: source.city,
+    company: source.company,
+    periodMode: source.periodMode,
+    periodFrom: source.periodFrom,
+    periodTo: source.periodTo,
+    fields: source.fields,
+    group: 'gwarant',
+  });
+  return { ok: true, accountId: newAccountId };
 });
 
 ipcMain.handle('sync:run', async (event, platformId, accountId) => {
@@ -138,7 +163,8 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
     validateDownloadedReport({ platformId, account, filePath: result.filePath });
-    lastDownloads.set(`${platformId}:${accountId}`, {
+    const targetMap = account.group === 'gwarant' ? lastGwarantDownloads : lastDownloads;
+    targetMap.set(`${platformId}:${accountId}`, {
       platformId,
       accountId,
       city: account.city,
@@ -156,8 +182,13 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
 
 // Warstwa kontrolna: pozwala rendererowi sprawdzic, ktore skonfigurowane konta maja juz
 // pobrany plik w biezacej sesji (checklista "co sie pobralo" przed uploadem do PartnerTax).
+// Tylko konta domyslnej grupy - gwarant ma swoja wlasna checkliste, patrz downloads:statusGwarant.
 ipcMain.handle('downloads:status', () => {
   return Array.from(lastDownloads.values());
+});
+
+ipcMain.handle('downloads:statusGwarant', () => {
+  return Array.from(lastGwarantDownloads.values());
 });
 
 ipcMain.handle('upload:run', async (event) => {

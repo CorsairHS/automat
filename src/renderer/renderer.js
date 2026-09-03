@@ -24,6 +24,12 @@ let deleteStatusElement = null;
 let reportAccountsCache = [];
 let downloadAllButton = null;
 let downloadAllStatusElement = null;
+// Konta zdublowane do zakladki Gwarant (przycisk "Dodaj do gwaranta" na karcie konta) -
+// osobna checklista/"Pobierz wszystkie" w tej zakladce, calkowicie niezalezna od Kontroli
+// pobran/wgrywania powyzej (patrz downloads:statusGwarant w main.js).
+let gwarantReportAccountsCache = [];
+let gwarantDownloadAllButton = null;
+let gwarantDownloadAllStatusElement = null;
 // Zakladka platformy aktywna w widoku kont (Uber/Bolt/FreeNow/BoltFood/PartnerTax) -
 // trzymana poza render(), zeby przetrwac ponowne wywolania render() (np. po Zapisz/Usun/
 // Pobierz teraz) i partner nie wracal za kazdym razem do pierwszej zakladki.
@@ -85,6 +91,7 @@ async function render() {
   CONFIG = await window.api.getPlatformsConfig();
 
   reportAccountsCache = [];
+  gwarantReportAccountsCache = [];
   statusElements.clear();
   runButtons.clear();
 
@@ -98,7 +105,7 @@ async function render() {
   // wypelnieniem) eliminuje ta przerwe.
   const platformSections = [];
   for (const platform of CONFIG.platforms) {
-    const accounts = await window.api.listAccounts(platform.id);
+    const accounts = await window.api.listAccounts(platform.id, 'default');
     if (platform.report) {
       for (const account of accounts) {
         reportAccountsCache.push({
@@ -112,18 +119,50 @@ async function render() {
     platformSections.push({ platform, section: await renderPlatformSection(platform, accounts) });
   }
 
-  if (!activePlatformId || !CONFIG.platforms.some((p) => p.id === activePlatformId)) {
+  // Podsekcje zakladki Gwarant - po jednej na platforme z co najmniej jednym zdublowanym
+  // kontem (grupa 'gwarant'). PartnerTax admin (multiAccount: false) nie ma kont do
+  // dublowania, wiec go pomijamy.
+  const gwarantSubsections = [];
+  for (const platform of CONFIG.platforms) {
+    if (!platform.multiAccount) continue;
+    const accounts = await window.api.listAccounts(platform.id, 'gwarant');
+    if (accounts.length === 0) continue;
+    if (platform.report) {
+      for (const account of accounts) {
+        gwarantReportAccountsCache.push({
+          platformId: platform.id,
+          platformLabel: platform.label,
+          accountId: account.accountId,
+          label: account.label,
+        });
+      }
+    }
+    gwarantSubsections.push({
+      platform,
+      section: await renderPlatformSection(platform, accounts, { showAddButton: false, allowGuarantorButton: false }),
+    });
+  }
+
+  const tabIds = [...CONFIG.platforms.map((p) => p.id), 'gwarant'];
+  if (!activePlatformId || !tabIds.includes(activePlatformId)) {
     activePlatformId = CONFIG.platforms[0]?.id || null;
   }
 
   const container = document.getElementById('platform-list');
   container.innerHTML = '';
-  container.appendChild(renderPlatformTabs(CONFIG.platforms));
+  container.appendChild(renderPlatformTabs([
+    ...CONFIG.platforms.map((p) => ({ id: p.id, label: p.label })),
+    { id: 'gwarant', label: 'Gwarant' },
+  ]));
   for (const { platform, section } of platformSections) {
     section.dataset.platformId = platform.id;
     section.style.display = platform.id === activePlatformId ? '' : 'none';
     container.appendChild(section);
   }
+
+  const gwarantContainer = await renderGwarantSection(gwarantSubsections);
+  gwarantContainer.style.display = activePlatformId === 'gwarant' ? '' : 'none';
+  container.appendChild(gwarantContainer);
 
   await renderChecklistSection();
   renderUploadSection();
@@ -395,6 +434,170 @@ async function runAllDownloads() {
 }
 
 /**
+ * Zakladka Gwarant: kontener z wlasna checklista pobran i podsekcjami kont (po jednej na
+ * platforme pochodzenia), zbudowanymi tymi samymi kartami co zakladki Uber/Bolt/FreeNow/
+ * Bolt Food (pelne pola, "Pobierz teraz", edycja, usuniecie) - tylko bez przyciskow
+ * "+ Dodaj konto" i "Dodaj do gwaranta" (patrz options w renderPlatformSection/
+ * renderAccountCard). Caly kontener ma dataset.platformId = 'gwarant', wiec dziala z
+ * istniejacym przelaczaniem widocznosci zakladek w renderPlatformTabs bez zadnych zmian.
+ */
+async function renderGwarantSection(subsections) {
+  const container = document.createElement('div');
+  container.id = 'gwarant-section';
+  container.dataset.platformId = 'gwarant';
+
+  const header = document.createElement('h2');
+  header.textContent = 'Gwarant';
+  container.appendChild(header);
+
+  const note = document.createElement('p');
+  note.className = 'platform-note';
+  note.textContent = 'Konta dodane przyciskiem "Dodaj do gwaranta" na kartach w zakladkach platform - niezalezne kopie (edycja tutaj nie wplywa na oryginalne konto i odwrotnie). Maja wlasna checkliste i "Pobierz teraz" ponizej - nie wchodza do Kontroli pobran / Pobierz wszystkie / wgrywania do PartnerTax na dole strony.';
+  container.appendChild(note);
+
+  container.appendChild(await renderGwarantChecklist());
+
+  if (subsections.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'platform-note';
+    empty.textContent = 'Brak kont w zakladce Gwarant. Dodaj konto przyciskiem "Dodaj do gwaranta" w zakladkach Uber/Bolt/FreeNow/Bolt Food.';
+    container.appendChild(empty);
+  } else {
+    for (const { section } of subsections) {
+      container.appendChild(section);
+    }
+  }
+
+  return container;
+}
+
+/**
+ * Checklista pobran wylacznie dla kont z grupy 'gwarant' - stan "pobrano" czyta z osobnej
+ * mapy w main.js (downloads:statusGwarant / lastGwarantDownloads), calkowicie niezaleznej
+ * od checklisty domyslnej (downloads:status / lastDownloads), zeby pobrania w tej zakladce
+ * nigdy nie wplynely na wspolne "Pobierz wszystkie"/wgrywanie do PartnerTax.
+ */
+async function renderGwarantChecklist() {
+  const section = document.createElement('section');
+  section.id = 'gwarant-checklist-section';
+  section.className = 'platform-section';
+
+  const header = document.createElement('h3');
+  header.textContent = 'Kontrola pobran (Gwarant)';
+  section.appendChild(header);
+
+  if (gwarantReportAccountsCache.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'platform-note';
+    empty.textContent = 'Brak skonfigurowanych kont w zakladce Gwarant.';
+    section.appendChild(empty);
+    return section;
+  }
+
+  const downloads = await window.api.getGwarantDownloadsStatus();
+  const downloadedMap = new Map(downloads.map((d) => [`${d.platformId}:${d.accountId}`, d]));
+
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+
+  const runBtn = document.createElement('button');
+  runBtn.className = 'btn-run';
+  runBtn.textContent = 'Pobierz wszystkie (Gwarant)';
+  gwarantDownloadAllButton = runBtn;
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+  gwarantDownloadAllStatusElement = statusSpan;
+
+  runBtn.onclick = () => runAllGwarantDownloads();
+
+  runRow.appendChild(runBtn);
+  runRow.appendChild(statusSpan);
+  section.appendChild(runRow);
+
+  const list = document.createElement('div');
+  list.className = 'checklist-list';
+
+  for (const item of gwarantReportAccountsCache) {
+    const entry = downloadedMap.get(`${item.platformId}:${item.accountId}`);
+    const row = document.createElement('label');
+    row.className = 'checklist-item' + (entry ? ' checked' : '');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = Boolean(entry);
+    checkbox.disabled = true;
+    row.appendChild(checkbox);
+
+    const text = document.createElement('span');
+    const accountLabel = item.label || item.accountId;
+    if (entry) {
+      const fileName = entry.filePath.split(/[\\/]/).pop();
+      const time = new Date(entry.downloadedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+      text.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})`;
+    } else {
+      text.textContent = `${item.platformLabel} - ${accountLabel}: nie pobrano`;
+    }
+    row.appendChild(text);
+
+    list.appendChild(row);
+  }
+  section.appendChild(list);
+
+  return section;
+}
+
+/**
+ * Podmienia w miejscu tylko checkliste Gwaranta wewnatrz #gwarant-section (bez przebudowy
+ * calej zakladki) - analogicznie do renderChecklistSection() w petli runAllDownloads.
+ */
+async function refreshGwarantChecklist() {
+  const parent = document.getElementById('gwarant-section');
+  if (!parent) return;
+  const newSection = await renderGwarantChecklist();
+  const existing = document.getElementById('gwarant-checklist-section');
+  if (existing) {
+    existing.replaceWith(newSection);
+  } else {
+    parent.insertBefore(newSection, parent.children[2] || null);
+  }
+}
+
+/**
+ * Odpowiednik runAllDownloads() dla zakladki Gwarant - ta sama sekwencyjna logika
+ * (jedno widoczne okno przegladarki na raz), ale nad gwarantReportAccountsCache i wlasnymi
+ * elementami przycisku/statusu, zeby dzialac calkowicie niezaleznie od "Pobierz wszystkie"
+ * w Kontroli pobran.
+ */
+async function runAllGwarantDownloads() {
+  if (gwarantReportAccountsCache.length === 0) return;
+
+  if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = true;
+  for (const btn of runButtons.values()) btn.disabled = true;
+
+  let doneCount = 0;
+  for (const item of gwarantReportAccountsCache) {
+    const key = `${item.platformId}:${item.accountId}`;
+    const accountLabel = item.label || item.accountId;
+    if (gwarantDownloadAllStatusElement) {
+      gwarantDownloadAllStatusElement.textContent = `Pobieram (${doneCount + 1}/${gwarantReportAccountsCache.length}): ${item.platformLabel} - ${accountLabel}...`;
+    }
+    const statusSpan = statusElements.get(key);
+    if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
+
+    const result = await window.api.runSync(item.platformId, item.accountId);
+    if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
+    doneCount += 1;
+    await refreshGwarantChecklist();
+    if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = true;
+  }
+
+  if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = false;
+  for (const btn of runButtons.values()) btn.disabled = false;
+  if (gwarantDownloadAllStatusElement) gwarantDownloadAllStatusElement.textContent = `Gotowe: pobrano ${doneCount}/${gwarantReportAccountsCache.length} kont.`;
+}
+
+/**
  * Wgrywanie do PartnerTax admin dziala na plikach ostatnio pobranych w tej samej sesji
  * aplikacji (trzymanych w pamieci procesu main - patrz lastDownloads w main.js), wiec
  * przycisk jest jeden, globalny, nie per-konto: klika sie go po pobraniu raportow
@@ -587,7 +790,8 @@ function renderSessionTransferSection() {
   document.getElementById('platform-list').appendChild(section);
 }
 
-async function renderPlatformSection(platform, accounts) {
+async function renderPlatformSection(platform, accounts, options = {}) {
+  const { showAddButton = true, allowGuarantorButton = true } = options;
   const section = document.createElement('section');
   section.className = 'platform-section';
 
@@ -613,16 +817,16 @@ async function renderPlatformSection(platform, accounts) {
   list.className = 'account-list';
 
   for (const account of accounts) {
-    list.appendChild(renderAccountCard(platform, account));
+    list.appendChild(renderAccountCard(platform, account, { allowGuarantorButton }));
   }
   section.appendChild(list);
 
-  if (platform.multiAccount || accounts.length === 0) {
+  if (showAddButton && (platform.multiAccount || accounts.length === 0)) {
     const addBtn = document.createElement('button');
     addBtn.className = 'btn-add';
     addBtn.textContent = platform.multiAccount ? '+ Dodaj konto' : '+ Dodaj dane logowania';
     addBtn.onclick = () => {
-      list.appendChild(renderAccountCard(platform, null));
+      list.appendChild(renderAccountCard(platform, null, { allowGuarantorButton }));
       addBtn.remove();
     };
     section.appendChild(addBtn);
@@ -631,7 +835,8 @@ async function renderPlatformSection(platform, accounts) {
   return section;
 }
 
-function renderAccountCard(platform, account) {
+function renderAccountCard(platform, account, options = {}) {
+  const { allowGuarantorButton = true } = options;
   const isNew = !account;
   const card = document.createElement('div');
   card.className = 'platform-card';
@@ -749,6 +954,22 @@ function renderAccountCard(platform, account) {
       await render();
     };
     actions.appendChild(deleteBtn);
+
+    // Tworzy NIEZALEZNA kopie tego konta w zakladce Gwarant (nowy accountId, wlasne
+    // dane) - edycja jednej strony nie wplywa na druga. Nie pokazujemy tego przycisku na
+    // kartach juz znajdujacych sie w Gwarancie (allowGuarantorButton: false), zeby nie
+    // dublowac w nieskonczonosc.
+    if (allowGuarantorButton && platform.multiAccount) {
+      const guarantorBtn = document.createElement('button');
+      guarantorBtn.className = 'btn-secondary';
+      guarantorBtn.textContent = 'Dodaj do gwaranta';
+      guarantorBtn.onclick = async () => {
+        guarantorBtn.disabled = true;
+        await window.api.duplicateToGuarantor(platform.id, account.accountId);
+        await render();
+      };
+      actions.appendChild(guarantorBtn);
+    }
   }
 
   card.appendChild(actions);

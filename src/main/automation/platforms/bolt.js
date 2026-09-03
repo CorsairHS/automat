@@ -103,15 +103,20 @@ function monthIndexOfIsoDate(isoDate) {
 }
 
 /**
- * Klika strzalke "poprzedni"/"nastepny" miesiac kalendarza react-datepicker az wyswietlany
- * miesiac (sledzony lokalnie, bez odczytu zlokalizowanej nazwy miesiaca z DOM) zrowna sie
- * z docelowym. Zwraca nowy, aktualny indeks wyswietlanego miesiaca.
+ * Klika strzalke "poprzedni"/"nastepny" miesiac kalendarza az wyswietlany miesiac (sledzony
+ * lokalnie, bez odczytu zlokalizowanej nazwy miesiaca z DOM) zrowna sie z docelowym. Zwraca
+ * nowy, aktualny indeks wyswietlanego miesiaca.
+ *
+ * Przyciski nawigacji NIE maja juz klasy react-datepicker__navigation--previous/--next
+ * (Bolt przebudowal je na wlasne komponenty Tailwind) - zweryfikowane w devtools 2026-09-01:
+ * to zwykle <button> z aria-label="Previous month" / "Next month" (po angielsku, mimo ze
+ * reszta UI jest po polsku). Komorki dni nadal maja klasy react-datepicker__day*.
  */
 async function navigateCalendarToMonth(page, targetMonthIndex, currentMonthIndex) {
   const diff = targetMonthIndex - currentMonthIndex;
-  const selector = diff >= 0 ? '.react-datepicker__navigation--next' : '.react-datepicker__navigation--previous';
+  const ariaLabel = diff >= 0 ? 'Next month' : 'Previous month';
   for (let i = 0; i < Math.abs(diff); i += 1) {
-    await humanClick(page.locator(selector));
+    await humanClick(page.getByRole('button', { name: ariaLabel, exact: true }));
     await humanDelay(150, 350);
   }
   return targetMonthIndex;

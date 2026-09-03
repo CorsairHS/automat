@@ -1,6 +1,6 @@
 {
   "name": "partnertax-automat",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Lokalny automat do pobierania raportow z Uber/Bolt/Freenow i wgrywania ich do PartnerTax admin",
   "main": "src/main/main.js",
   "scripts": {

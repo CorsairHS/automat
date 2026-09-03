@@ -51,13 +51,21 @@ function decryptFields(storedFields) {
   return result;
 }
 
-function listAccounts(platformId) {
+/**
+ * group: 'default' (zwykle konta widoczne w zakladkach platform) albo 'gwarant'
+ * (niezalezne kopie utworzone przyciskiem "Dodaj do gwaranta" - patrz renderer.js).
+ * Bez podania group zwraca wszystkie konta niezaleznie od grupy (uzywane tam, gdzie
+ * trzeba znalezc konto po accountId bez wiedzy, do ktorej grupy nalezy - np. sync:run).
+ */
+function listAccounts(platformId, group) {
   const store = readRaw();
   const accounts = store[platformId] || [];
-  return accounts.map((account) => ({
-    ...account,
-    fields: decryptFields(account.fields),
-  }));
+  return accounts
+    .filter((account) => !group || (account.group || 'default') === group)
+    .map((account) => ({
+      ...account,
+      fields: decryptFields(account.fields),
+    }));
 }
 
 function saveAccount(platformId, account) {
@@ -83,6 +91,7 @@ function saveAccount(platformId, account) {
     periodMode: account.periodMode || platform.defaultPeriodMode || 'current_week',
     periodFrom: account.periodFrom || null,
     periodTo: account.periodTo || null,
+    group: account.group || (existingEntry ? existingEntry.group : null) || 'default',
     fields: mergedFields,
   };
 

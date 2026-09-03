@@ -7,9 +7,10 @@ const { contextBridge, ipcRenderer } = require('electron');
  */
 contextBridge.exposeInMainWorld('api', {
   getPlatformsConfig: () => ipcRenderer.invoke('platforms:config'),
-  listAccounts: (platformId) => ipcRenderer.invoke('accounts:list', platformId),
+  listAccounts: (platformId, group) => ipcRenderer.invoke('accounts:list', platformId, group),
   saveAccount: (platformId, account) => ipcRenderer.invoke('accounts:save', platformId, account),
   deleteAccount: (platformId, accountId) => ipcRenderer.invoke('accounts:delete', platformId, accountId),
+  duplicateToGuarantor: (platformId, accountId) => ipcRenderer.invoke('accounts:duplicateToGuarantor', platformId, accountId),
   runSync: (platformId, accountId) => ipcRenderer.invoke('sync:run', platformId, accountId),
   onSyncStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
@@ -18,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   runUpload: () => ipcRenderer.invoke('upload:run'),
   getDownloadsStatus: () => ipcRenderer.invoke('downloads:status'),
+  getGwarantDownloadsStatus: () => ipcRenderer.invoke('downloads:statusGwarant'),
   onUploadStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('upload:status', listener);

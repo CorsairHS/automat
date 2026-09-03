@@ -30,8 +30,8 @@ function buildReportHtml({ csvFileName, loginUrl }) {
 <body>
   <input placeholder="d MMM - d MMM" readonly />
   <div id="calendar" style="display:none">
-    <button class="react-datepicker__navigation--previous">Poprzedni</button>
-    <button class="react-datepicker__navigation--next">Nastepny</button>
+    <button aria-label="Previous month">Poprzedni</button>
+    <button aria-label="Next month">Nastepny</button>
     <div id="days"></div>
   </div>
   <button id="pobierz-button">Pobierz</button>
@@ -69,13 +69,13 @@ function buildReportHtml({ csvFileName, loginUrl }) {
       await fetch('/api/nav-click', { method: 'POST', body: direction });
     }
 
-    document.querySelector('.react-datepicker__navigation--next').addEventListener('click', async () => {
+    document.querySelector('[aria-label="Next month"]').addEventListener('click', async () => {
       displayedMonth += 1;
       if (displayedMonth > 11) { displayedMonth = 0; displayedYear += 1; }
       renderDays();
       await reportNav('next');
     });
-    document.querySelector('.react-datepicker__navigation--previous').addEventListener('click', async () => {
+    document.querySelector('[aria-label="Previous month"]').addEventListener('click', async () => {
       displayedMonth -= 1;
       if (displayedMonth < 0) { displayedMonth = 11; displayedYear -= 1; }
       renderDays();
