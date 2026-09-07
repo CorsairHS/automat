@@ -1,6 +1,6 @@
 const path = require('path');
 const { computePeriodRange } = require('../dateRange');
-const { waitForAuthStateToSettle, waitForLoginCompletion } = require('../loginHelpers');
+const { waitForAuthStateToSettle, waitForLoginCompletion, SAFE_TO_HELP_MARKER } = require('../loginHelpers');
 const { humanClick, humanFill, humanDelay } = require('../humanInteraction');
 
 const LOGIN_URL = 'https://supplier.uber.com/';
@@ -36,8 +36,8 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     // 2026-08-25). Zamiast zgadywac strukture, uzywamy stabilnego id="forward-button"
     // (potwierdzone na zywym DOM dla kroku 1 - "Dalej"), z fallbackiem na
     // button[type="submit"]/bez atrybutu w formularzu, gdyby ten id kiedys zniknal.
-    const clickContinueButton = async (fieldLocator) => {
-      const byId = page.locator('#forward-button');
+    const clickContinueButton = async (fieldLocator, frame = page) => {
+      const byId = frame.locator('#forward-button');
       if (await byId.isVisible().catch(() => false)) {
         await humanClick(byId);
         return;
@@ -48,38 +48,61 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
 
     log('Loguje sie do Ubera (krok 1/2: email)...');
     const emailInput = page.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS');
-    const passwordInput = page.locator('#PASSWORD');
     await humanFill(emailInput, account.fields.email);
-    // Klikniecie "Dalej" bywa "polykane" (np. strona jeszcze nie w pelni podpieta pod
-    // handler, chwilowa nakladka) - w odroznieniu od kroku 2 (ponizej), ponawianie tego
-    // klikniecia jest bezpieczne: to czysto kliencka zmiana widoku (krok 1 -> krok 2),
-    // bez zadnego zadania do backendu, wiec wielokrotne klikniecie przed faktycznym
-    // przejsciem nie ma skutkow ubocznych.
-    const STEP1_ATTEMPTS = 3;
-    let step1Advanced = false;
-    for (let attempt = 1; attempt <= STEP1_ATTEMPTS; attempt += 1) {
-      await dismissChatBubble(page);
-      await clickContinueButton(emailInput);
-      // isVisible({timeout}) NIE odpytuje/nie czeka mimo timeoutu - to pojedyncze,
-      // natychmiastowe sprawdzenie. waitFor() faktycznie polluje az stan sie pojawi.
-      step1Advanced = await passwordInput.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
-      if (step1Advanced) break;
-      if (attempt < STEP1_ATTEMPTS) {
-        log(`Krok logowania (email) nie przeszedl dalej - ponawiam klikniecie "Dalej" (${attempt}/${STEP1_ATTEMPTS})...`);
-      }
-    }
-    if (!step1Advanced) {
-      throw new Error('Logowanie do Ubera utknelo na kroku 1 (pole hasla nie pojawilo sie) mimo kilku prob klikniecia "Dalej".');
-    }
-
-    log('Loguje sie do Ubera (krok 2/2: haslo)...');
-    await humanFill(passwordInput, account.fields.password);
     await dismissChatBubble(page);
-    await clickContinueButton(passwordInput);
+    await clickContinueButton(emailInput);
 
-    const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });
-    if (!loggedIn) {
-      throw new Error('Logowanie do Ubera nie powiodlo sie w wyznaczonym czasie (mozliwe 2FA wymagajace recznej interwencji).');
+    // Klikniecie "Dalej" bywa "polykane" (np. strona jeszcze nie w pelni podpieta pod
+    // handler, chwilowa nakladka) - ponawianie tego klikniecia jest bezpieczne, GDY krok
+    // 1 nadal jest na ekranie: to czysto kliencka zmiana widoku, bez zadnego zadania do
+    // backendu. Zaobserwowane na zywo (klient, 2026-09-04): Uber potrafi zamiast
+    // przejscia do hasla pokazac modal weryfikacji czlowieka Arkose Labs ("Ochrona
+    // konta"), a PO jego rozwiazaniu wrocic z powrotem do TEGO SAMEGO ekranu email -
+    // wymagajac ponownego klikniecia "Dalej". Cala logika ponawiania (przed I po
+    // ewentualnym wyzwaniu) jest wiec w jednej funkcji (waitForStep1Outcome), zamiast w
+    // osobnej "szybkiej" petli i osobnym biernym oczekiwaniu - to drugie nigdy nie
+    // klikalo ponownie, wiec po rozwiazaniu wyzwania i powrocie do ekranu email automat
+    // po prostu wisial w nieskonczonosc, czekajac na pole hasla, ktore bez kolejnego
+    // klikniecia nigdy sie nie pojawi.
+    //
+    // UWAGA (klient, 2026-09-04, druga runda): nawet PO tej poprawce klient zglosil, ze
+    // ekran hasla ("Witamy ponownie, <imie>") byl juz faktycznie na ekranie (kursor w
+    // polu "Wpisz haslo"), a automat i tak zglaszal powrot do ekranu email i ponawial
+    // "Dalej" zamiast wpisac haslo. Wniosek: sprawdzanie pola hasla WYLACZNIE w glownej
+    // ramce strony (page.locator) nie wystarcza - ten ekran (jak i modal Arkose, ktorego
+    // adres iframe w zaobserwowanym DOM wskazywal na "auth.uber.com") potrafi byc
+    // renderowany w osadzonym iframe wspolnego logowania Ubera, ktorego page.locator()
+    // nie widzi. Szukamy wiec pola hasla we WSZYSTKICH ramkach (patrz
+    // findVisibleInAnyFrame) i sprawdzamy to PRZED ewentualnym ponownym kliknieciem
+    // "Dalej" na starym ekranie email spod spodu.
+    const STEP1_TIMEOUT_MS = 5 * 60 * 1000;
+    const step1Result = await waitForStep1Outcome(
+      page,
+      { emailInput, isLoggedIn, clickContinueButton },
+      STEP1_TIMEOUT_MS,
+      log
+    );
+    if (!step1Result) {
+      throw new Error('Logowanie do Ubera utknelo na kroku 1 (pole hasla nie pojawilo sie) mimo ponawiania klikniecia "Dalej" i oczekiwania na reczne rozwiazanie ewentualnej weryfikacji.');
+    }
+
+    if (step1Result.outcome === 'password') {
+      const { locator: passwordInput, frame: passwordFrame } = step1Result;
+      log('Loguje sie do Ubera (krok 2/2: haslo)...');
+      await humanFill(passwordInput, account.fields.password);
+      await dismissChatBubble(page);
+      await clickContinueButton(passwordInput, passwordFrame);
+
+      const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });
+      if (!loggedIn) {
+        throw new Error('Logowanie do Ubera nie powiodlo sie w wyznaczonym czasie (mozliwe 2FA wymagajace recznej interwencji).');
+      }
+    } else {
+      // step1Result.outcome === 'loggedIn': partner dokonczyl logowanie recznie w oknie
+      // przegladarki (np. nieprzewidziany ekran, na ktorym pole hasla nie pasowalo do
+      // znanego selektora) - pomijamy automatyczne wypelnianie hasla, jest juz po
+      // wszystkim.
+      log('Zalogowano recznie w oknie przegladarki - pomijam automatyczne wypelnianie hasla.');
     }
   }
 
@@ -88,7 +111,9 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // pierwszej interakcji (klient zglosil, ze wolal, zeby znikaly natychmiast).
   await dismissChatBubble(page);
 
-  const { from, to } = computePeriodRange(account);
+  // Uber rozlicza okresy poniedzialek-poniedzialek (7 dni), nie poniedzialek-niedziela
+  // - patrz komentarz przy `mondayToMonday` w dateRange.js.
+  const { from, to } = computePeriodRange(account, new Date(), { mondayToMonday: true });
 
   // Nazwa pliku/wiersza wygenerowanego raportu ma stabilny, jezykowo-niezalezny prefiks
   // "RRRRMMDD-RRRRMMDD-payments_driver..." (zweryfikowane na pobranych plikach, np.
@@ -227,9 +252,340 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   return { filePath };
 }
 
+/**
+ * Wykrywa modal weryfikacji czlowieka Arkose Labs ("Ochrona konta" / "Rozpocznij
+ * zadanie"), ktory Uber potrafi pokazac miedzy krokiem 1 (email) a krokiem 2 (haslo)
+ * logowania - potwierdzone na zywym DOM (klient, 2026-09-04): pelnoekranowy dialog
+ * (role="dialog", aria-modal="true", id="arkose-challenge") z osadzonym iframe
+ * (data-e2e="enforcement-frame", title="Verification challenge"). Modal zaslania
+ * cala strone (iframe height:100vh/width:100vw) - pola formularza pod spodem moga
+ * nadal raportowac isVisible()===true dla Playwrighta (sama widocznosc CSS nie
+ * uwzglednia przykrycia przez inny element), wiec nie wystarczy czekac na
+ * widocznosc pola hasla - trzeba jawnie sprawdzic obecnosc tego modalu.
+ */
+const isArkoseChallengeVisible = (page) =>
+  page.locator('#arkose-challenge, [data-e2e="enforcement-frame"]').first().isVisible().catch(() => false);
+
+/**
+ * Szuka widocznego elementu pasujacego do selektora we WSZYSTKICH ramkach strony (nie
+ * tylko glownej `page`). Zaobserwowany na zywym DOM modal Arkose (patrz
+ * isArkoseChallengeVisible) osadza iframe z adresu innej subdomeny ("auth.uber.com" w
+ * fragmencie URL) - to sygnal, ze przynajmniej czesc dalszych krokow logowania (haslo,
+ * przycisk "Dalej" dla tego ekranu) Uber potrafi renderowac we WSPOLNYM, osadzonym
+ * iframe logowania, ktorego zwykle page.locator() (dziala tylko na glownej ramce) nie
+ * widzi - zaobserwowane na zywo (klient, 2026-09-04): ekran hasla byl faktycznie na
+ * ekranie (kursor aktywny w polu), a page.locator('input[type="password"]') mimo to go
+ * nie znajdowal. Zwraca pierwsze trafienie jako { frame, locator } (frame potrzebny
+ * pozniej, zeby szukac przycisku "Dalej" w TEJ SAMEJ ramce), albo null.
+ */
+async function findVisibleInAnyFrame(page, selector) {
+  for (const frame of page.frames()) {
+    const candidates = frame.locator(selector);
+    // NIE bierzemy .first() przed sprawdzeniem widocznosci - selektor
+    // input[type="password"] moze trafic w wiecej niz jeden element na stronie (np.
+    // ukryty formularz "Nie pamietam hasla"/rejestracji wspoldzielacy DOM z glownym
+    // wizardem logowania), a .first() bierze PIERWSZY element w kolejnosci DOM,
+    // niekoniecznie ten faktycznie widoczny - zaobserwowane na zywo (klient,
+    // 2026-09-04): pole hasla mialo potwierdzone id="PASSWORD" i type="password", a
+    // mimo to nie bylo wykrywane, bo .first() prawdopodobnie trafial w inny,
+    // niewidoczny element pasujacy do type="password" wczesniej w DOM. Sprawdzamy
+    // wiec KAZDE dopasowanie po kolei, az znajdziemy faktycznie widoczne.
+    const count = await candidates.count().catch(() => 0);
+    for (let i = 0; i < count; i += 1) {
+      const candidate = candidates.nth(i);
+      if (await candidate.isVisible().catch(() => false)) {
+        return { frame, locator: candidate };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Prowadzi caly krok 1 logowania (email) az do jednego z trzech wynikow: (a) pojawi sie
+ * pole hasla (krok 2) - zwraca { outcome: 'password', locator, frame }, (b) logowanie
+ * zakonczy sie samo (partner dokonczyl je recznie w oknie przegladarki) - zwraca
+ * { outcome: 'loggedIn' }, (c) uplynie timeout - zwraca null. Zaklada, ze pierwsze
+ * klikniecie "Dalej" juz sie odbylo (patrz wywolanie w syncUberAccount) - ta funkcja
+ * odpowiada za WSZYSTKIE ponowienia, zarowno szybkie (polkniete klikniecie), jak i te po
+ * ewentualnym rozwiazaniu weryfikacji.
+ *
+ * Jesli w danej chwili widoczny jest modal Arkose (patrz isArkoseChallengeVisible),
+ * informuje o tym raz i czeka az zniknie, bez klikania - zaobserwowane na zywo (klient,
+ * 2026-09-04), ze ponowne klikniecie "Dalej" w trakcie ladowania/rozwiazywania tego
+ * wyzwania zdaje sie je resetowac.
+ *
+ * Pole hasla szukane jest we WSZYSTKICH ramkach (patrz findVisibleInAnyFrame) i
+ * sprawdzane PRZED ewentualnym ponownym kliknieciem "Dalej" na ekranie email - dopiero
+ * gdy naprawde nie ma go nigdzie, a ekran email (krok 1) jest z powrotem na ekranie,
+ * klikamy "Dalej" ponownie (nie czesciej niz raz na CLICK_COOLDOWN_MS). To pokrywa DWA
+ * rozne przypadki tym samym mechanizmem: (1) zwykle polkniete klikniecie tuz po
+ * wypelnieniu emaila, (2) powrot do ekranu email PO rozwiazaniu weryfikacji Arkose.
+ */
+async function waitForStep1Outcome(page, { emailInput, isLoggedIn, clickContinueButton }, timeoutMs, log) {
+  const CLICK_COOLDOWN_MS = 8000;
+  const deadline = Date.now() + timeoutMs;
+  let captchaMessageShown = false;
+  let helpMessageShown = false;
+  let lastClickAt = Date.now();
+
+  while (Date.now() < deadline) {
+    if (await isArkoseChallengeVisible(page)) {
+      if (!captchaMessageShown) {
+        log(`${SAFE_TO_HELP_MARKER} Uber pokazuje weryfikacje "Ochrona konta" (puzzle Arkose) - rozwiaz ja recznie w oknie przegladarki ("Rozpocznij zadanie" -> dopasuj obrazki). Automat czeka i sam wykryje zakonczenie.`);
+        captchaMessageShown = true;
+        helpMessageShown = true;
+      }
+      await page.waitForTimeout(500);
+      continue;
+    }
+    const passwordMatch = await findVisibleInAnyFrame(page, '#PASSWORD, input[type="password"]');
+    if (passwordMatch) return { outcome: 'password', ...passwordMatch };
+    if (await isLoggedIn()) return { outcome: 'loggedIn' };
+
+    const emailStepVisible = await emailInput.isVisible().catch(() => false);
+    if (emailStepVisible && Date.now() - lastClickAt >= CLICK_COOLDOWN_MS) {
+      log(captchaMessageShown
+        ? 'Ekran logowania wrocil do podania emaila/telefonu po weryfikacji - ponawiam klikniecie "Dalej"...'
+        : 'Krok logowania (email) nie przeszedl dalej - ponawiam klikniecie "Dalej"...');
+      await dismissChatBubble(page);
+      await clickContinueButton(emailInput);
+      lastClickAt = Date.now();
+      if (!helpMessageShown) {
+        // Informujemy o mozliwosci recznej pomocy dopiero po pierwszym nieudanym
+        // ponowieniu (nie od razu przy pierwszym klikizemu emaila) - typowy przypadek
+        // "polknietego" klikniecia rozwiazuje sie sam w kolejnej probie i nie powinien
+        // niepokoic partnera falszywym alarmem o koniecznosci recznej interwencji.
+        log(`${SAFE_TO_HELP_MARKER} Jesli w oknie przegladarki widac dodatkowe zabezpieczenie (np. "Ochrona konta"), rozwiaz je recznie. Automat czeka i sam wykryje przejscie dalej. (W pozostalych krokach nie klikaj w oknie przegladarki.)`);
+        helpMessageShown = true;
+      }
+    }
+    await page.waitForTimeout(300);
+  }
+  return null;
+}
+
 /** "2026-08-10" -> "2026/08/10" (format pol "Start of report"/"End of report" w Uberze). */
 function toSlashDate(isoDate) {
   return isoDate.replace(/-/g, '/');
+}
+
+/**
+ * Parsuje zwiniete pole "Report time range" (np. "Aug 24, 2026 4:01AM - Aug 31, 2026
+ * 4:01AM") na pare dat ISO. Uber czasem wypelnia to pole domyslnym zakresem (poprzednie
+ * okno rozliczeniowe) juz PRZED otwarciem panelu - jesli ten domyslny zakres pokrywa sie
+ * z wyliczonym "from"/"to", nie trzeba w ogole dotykac kalendarza (patrz uzycie ponizej).
+ * Zwraca null, jesli tekstu nie da sie sparsowac (np. placeholder albo nieznany format).
+ */
+function parseUberTimeRangeValue(value) {
+  if (!value) return null;
+  const parts = value.split(/\s*-\s*/);
+  if (parts.length !== 2) return null;
+  const toIso = (part) => {
+    const normalized = part.trim().replace(/(AM|PM)$/i, ' $1');
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+  const from = toIso(parts[0]);
+  const to = toIso(parts[1]);
+  if (!from || !to) return null;
+  return { from, to };
+}
+
+/**
+ * Szuka w zakladce "Settlement window" (Okno rozliczenia) gotowego okna rozliczeniowego
+ * odpowiadajacego dokladnie wyliczonemu from/to (np. "Aug 31, 2026 4:01AM - Sep 7, 2026
+ * 4:01AM"). Klient poprosil, zeby automat najpierw sprawdzal ta gotowa liste, zanim
+ * przejdzie do zakladki "Custom range" - ta druga okazala sie najbardziej zawodna czescia
+ * calego flow (patrz komentarze przy selectUberCalendarDay/navigateCalendarMonths).
+ *
+ * KLUCZOWE (zweryfikowane na zrzucie z zywego DOM, klient 2026-09-07 - poprzednia wersja
+ * tej funkcji tego NIE robila i dlatego automat "caly czas przechodzil na zakres
+ * niestandardowy"): lista okien rozliczeniowych NIE jest widoczna od razu po otwarciu
+ * zakladki. Wewnatrz zakladki "Okno rozliczenia" jest WLASNY, ZAGNIEZDZONY picker -
+ * <button data-testid="payment-time-range-picker-button" aria-haspopup="true"
+ * aria-expanded="..." aria-controls="..."> pokazujacy aktualnie wybrane okno - i dopiero
+ * jego klikniecie rozwija liste <li role="option"> z gotowymi okresami. Bez tego
+ * klikniecia szukanie role="option" zawsze zwracalo zero trafien, wiec kod leciał do
+ * galezi "Custom range" nawet wtedy, gdy potrzebne okno bylo na liscie.
+ *
+ * Szukanie role="option" zawezamy do kontenera wskazanego przez aria-controls tego
+ * pickera - bez tego dopasowanie trafiloby takze w NIEZWiazane elementy role="option" z
+ * listy "Report type" wyzej w tym samym dialogu. Gdy aria-controls nie prowadzi do zadnej
+ * opcji (inna struktura DOM), wracamy do szukania na calej stronie. Zwraca lokalizator
+ * pasujacej opcji, albo null, jesli zadna sie nie zgadza.
+ */
+async function findMatchingSettlementWindowOption(page, settlementPicker, from, to) {
+  // Zakladka "Okno rozliczenia" jest aktywna domyslnie, ale gdyby (np. po nieudanej
+  // wczesniejszej probie) aktywna byla "Zakres niestandardowy", wracamy na nia jawnie -
+  // klient wprost poprosil, zeby automat na niej ZOSTAWAL, dopoki nie okaze sie, ze
+  // potrzebnego okna na liscie nie ma.
+  const settlementTab = page
+    .locator('[role="tab"]:not([id*="reports/"])')
+    .filter({ hasText: /^Settlement window$|^Okno rozliczenia$/i });
+  // Sprawdzamy WIDOCZNOSC, nie tylko aria-selected: przy zamknietym panelu zakladka
+  // nadal jest w DOM (z aria-selected="false" pozostalym po poprzedniej, nieudanej
+  // probie), a proba klikniecia jej wtedy konczy sie bledem "Element is not visible".
+  if (
+    (await settlementTab.isVisible().catch(() => false)) &&
+    (await settlementTab.getAttribute('aria-selected').catch(() => null)) === 'false'
+  ) {
+    await dismissChatBubble(page);
+    await humanClick(settlementTab, { force: true });
+    await humanDelay(200, 500);
+  }
+
+  if (!(await settlementPicker.isVisible().catch(() => false))) return null;
+  if ((await settlementPicker.getAttribute('aria-expanded').catch(() => null)) !== 'true') {
+    await dismissChatBubble(page);
+    await humanClick(settlementPicker);
+    await humanDelay(300, 600);
+  }
+
+  const listboxId = await settlementPicker.getAttribute('aria-controls').catch(() => null);
+  let options = listboxId
+    ? page.locator(`#${listboxId}`).locator('[role="option"]')
+    : page.locator('[role="option"]');
+  let count = await options.count().catch(() => 0);
+  if (count === 0 && listboxId) {
+    options = page.locator('[role="option"]');
+    count = await options.count().catch(() => 0);
+  }
+  for (let i = 0; i < count; i += 1) {
+    const option = options.nth(i);
+    const text = await option.textContent().catch(() => null);
+    const parsed = parseUberTimeRangeValue(text?.trim());
+    if (parsed?.from === from && parsed?.to === to) {
+      return option;
+    }
+  }
+  return null;
+}
+
+/**
+ * Zwija zagniezdzony picker okien rozliczeniowych (jesli jest rozwiniety) - wywolywane,
+ * gdy na jego liscie nie bylo potrzebnego okresu i przechodzimy do zakladki "Custom
+ * range". Zwijamy klikajac ten sam przycisk (toggle), a NIE Escapem - Escape w tym
+ * dialogu potrafi zamknac cale okno "Wygeneruj raport" (patrz komentarze w
+ * generateUberReportWithRetry).
+ */
+async function collapseSettlementPicker(page, settlementPicker) {
+  if ((await settlementPicker.getAttribute('aria-expanded').catch(() => null)) === 'true') {
+    await dismissChatBubble(page);
+    await humanClick(settlementPicker);
+    await humanDelay(200, 500);
+  }
+}
+
+/**
+ * Czy zewnetrzny panel "Przedzial czasowy raportu" (ten z zakladkami) jest otwarty.
+ *
+ * Rozpoznajemy to po elementach istniejacych WYLACZNIE wewnatrz tego panelu: pickerze
+ * okien rozliczeniowych (zakladka "Okno rozliczenia") albo polach zakresu dat (zakladka
+ * "Zakres niestandardowy"). NIE po obecnosci jakiejkolwiek zakladki role="tab" -
+ * aplikacja ma wlasne zakladki nawigacyjne POZA panelem, wiec takie sprawdzenie uznawalo
+ * juz zamkniety panel za otwarty i "zwijajace" klikniecie w pole-wyzwalacz OTWIERALO go z
+ * powrotem. Otwarty panel jest nakladka zaslaniajaca pola ponizej - i wlasnie to objawilo
+ * sie u klienta jako "nie wybiera organizacji" (2026-09-07).
+ */
+const TIME_FRAME_PANEL_MARKERS = [
+  // zakladka "Okno rozliczenia" - jej zagniezdzony picker okien rozliczeniowych
+  '[data-testid="payment-time-range-picker-button"]',
+  // zakladka "Zakres niestandardowy" - pola zakresu dat
+  'input[aria-label="Select a date range."]',
+];
+
+/**
+ * Panel jest otwarty, gdy widoczny jest DOWOLNY z jego markerow. Kazdy sprawdzamy
+ * OSOBNO - laczenie ich w jeden lokator przez .or(...).first() bralo pierwszy element w
+ * kolejnosci DOM (picker okien rozliczeniowych), ktory jest ukryty, gdy aktywna jest
+ * zakladka "Zakres niestandardowy" - i caly otwarty panel raportowal jako zamkniety.
+ */
+const isTimeFramePanelOpen = async (page) => {
+  for (const selector of TIME_FRAME_PANEL_MARKERS) {
+    if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
+  }
+  return false;
+};
+
+/**
+ * Zwija zewnetrzny panel "Przedzial czasowy raportu", jesli nadal jest otwarty - panel
+ * zaslania pola ponizej (organizacje, przycisk "Wygeneruj"), wiec pozostawienie go
+ * otwartego przechwytuje kolejne kliknieca. Zwijamy kliknieciem w pole-wyzwalacz, nie
+ * Escapem (uzasadnienie j.w.). Po kliknieciu sprawdzamy stan ponownie - dzieki temu
+ * funkcja jest idempotentna (na zamknietym panelu nie robi nic, wiec mozna ja wywolac
+ * "na wszelki wypadek") i sama naprawia sie, gdyby klikniecie zadzialalo odwrotnie.
+ */
+async function collapseTimeFramePanel(page, timeFrameTrigger, log) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!(await isTimeFramePanelOpen(page))) return true;
+    await dismissChatBubble(page);
+    await humanClick(timeFrameTrigger);
+    await humanDelay(300, 600);
+  }
+  const stillOpen = await isTimeFramePanelOpen(page);
+  if (stillOpen) {
+    // Nie przerywamy - dalsze kroki (organizacje, "Wygeneruj") radza sobie z zaslonietymi
+    // polami same (patrz clickEvenIfOverlaid). Zapisujemy to jednak w logu, bo bez tego
+    // jedynym sladem takiej sytuacji byl 30-sekundowy, milczacy timeout klikniecia.
+    log?.('Panel "Przedzial czasowy raportu" nie zwinal sie mimo kilku prob - klikam pola pod nim mimo zaslonienia.');
+  }
+  return !stillOpen;
+}
+
+/**
+ * Rozwija panel "Przedzial czasowy raportu", jesli nie jest jeszcze otwarty. Pole-wyzwalacz
+ * jest PRZELACZNIKIEM, wiec slepe klikanie go "zeby otworzyc" potrafi go rownie dobrze
+ * ZAMKNAC, gdy zostal otwarty juz wczesniej (np. przez nieudana poprzednia probe
+ * generowania - patrz retry w generateUberReportWithRetry). Skutkowalo to proba
+ * klikniecia zakladki "Okno rozliczenia", ktora jest wtedy w DOM, ale niewidoczna
+ * ("locator.click: Element is not visible"). Dlatego - jak przy zwijaniu - sterujemy
+ * STANEM (sprawdz -> ewentualnie kliknij -> sprawdz ponownie), a nie liczba klikniec.
+ */
+async function ensureTimeFramePanelOpen(page, timeFrameTrigger) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await isTimeFramePanelOpen(page)) return true;
+    await dismissChatBubble(page);
+    await humanClick(timeFrameTrigger);
+    await humanDelay(300, 600);
+  }
+  return isTimeFramePanelOpen(page);
+}
+
+/**
+ * Klika element, ktory moze byc ZASLONIETY przez nakladke, ktorej nie udalo sie zamknac.
+ *
+ * Powod (log z zywego uruchomienia, 2026-09-07 07:00:11): po wybraniu gotowego okna
+ * rozliczenia panel "Przedzial czasowy raportu" zostal otwarty, a Playwright przez ~50 s
+ * ponawial klikniecie w pole organizacji, ktore odbijalo sie od panelu ("<div
+ * role=\"tabpanel\" data-baseweb=\"tab-panel\"> ... subtree intercepts pointer events"),
+ * az partner sam zamknal przegladarke - z zewnatrz wygladalo to jak "automat wybral okres
+ * i nie wchodzi w organizacje".
+ *
+ * Zwijanie panelu (collapseTimeFramePanel) zostaje jako pierwsza linia obrony, ale nie
+ * moze byc JEDYNA - to nakladka strony trzeciej i jej zachowanie jest poza nasza
+ * kontrola. Gdy zwykle (pozycyjne) klikniecie nie przechodzi w rozsadnym czasie,
+ * wywolujemy natywne .click() bezposrednio na elemencie w DOM: zdarzenie idzie prosto do
+ * elementu, z pominieciem trafiania kursorem, wiec zadna nakladka go nie przechwyci. To
+ * ta sama technika, ktora w tym pliku sprawdzila sie juz dla checkboxa organizacji (i w
+ * partnertax.js dla checkboxa DELETE). Krotki timeout zamiast domyslnych 30 s, bo
+ * czekanie i tak nic tu nie zmieni - nakladka nie zniknie sama.
+ */
+async function clickEvenIfOverlaid(locator, label, log) {
+  try {
+    await humanClick(locator, { timeout: 5000 });
+    return;
+  } catch (error) {
+    log?.(`Klikniecie w "${label}" zostalo przechwycone przez nakladke - klikam element bezposrednio w DOM.`);
+    await locator.evaluate((el) => {
+      el.focus?.();
+      el.click();
+    });
+  }
 }
 
 /**
@@ -327,7 +683,7 @@ async function navigateCalendarMonths(page, deltaMonths) {
  * kontynuowac w niepewnym stanie - patrz generateUberReportWithRetry, ktora lapie te bledy
  * i probuje od nowa.
  */
-async function attemptGenerateUberReport(page, from, to, account) {
+async function attemptGenerateUberReport(page, from, to, account, log) {
   // Domyslny "Report type" to "Driver Activity"/"Czas i odleglosc kierowcy" - trzeba
   // przelaczyc na "Payments Driver". Jezyk UI jest nieprzewidywalny (widziany polski i
   // angielski dla tego samego konta w roznych sesjach) - dopasowujemy oba warianty.
@@ -343,83 +699,139 @@ async function attemptGenerateUberReport(page, from, to, account) {
   );
   await humanDelay(400, 900);
 
-  // Zweryfikowane na zywo (2026-08-18): pole "Report time range" jest domyslnie zwiniete
-  // (readonly, placeholder "Select time frame for report" / PL "Wybierz przedzial
-  // czasowy raportu") - trzeba je kliknac, zeby rozwinelo panel z dwiema zakladkami:
-  // "Settlement window" (gotowe okresy z listy, domyslnie aktywna) i "Custom range"
-  // (edytowalne pola Start/End date). UWAGA: strona w tle ma WLASNY, INNY zestaw
-  // zakladek ("Zgloszenia"/"Harmonogramy" - historia raportow), wiec zwykle
-  // getByRole('tab').nth(1) trafia w niewlasciwy zestaw. Zakladki tla maja w
-  // id/aria-controls segment "reports/" (np. "tabs-bui1-tab-reports/report-schedules"),
-  // zakladki w panelu nie - filtrujemy po tym, zeby zawezic do panelu.
-  const timeFrameTrigger = page.getByPlaceholder(/select time frame for report|wybierz przedzia. czasowy raportu/i);
-  await dismissChatBubble(page);
-  await humanClick(timeFrameTrigger);
-  // Dopasowanie po pozycji (nth(1)) okazalo sie zawodne - prawdopodobnie animacja panelu
-  // chwilowo duplikuje/podmienia elementy zakladek w DOM. Dopasowujemy po dokladnym
-  // tekscie (oba zaobserwowane warianty jezykowe) i klikamy z force:true, na wypadek
-  // niewidocznej nakladki przechwytujacej kliknieca (obserwowane wczesniej przy innych
-  // elementach tego panelu).
-  const customRangeTab = page
-    .locator('[role="tab"]:not([id*="reports/"])')
-    .filter({ hasText: /^Custom range$|^Zakres niestandardowy$/i });
-  await customRangeTab.waitFor({ state: 'visible' });
-  for (let attempt = 0; attempt < 8; attempt++) {
-    if ((await customRangeTab.getAttribute('aria-selected')) === 'true') break;
-    await dismissChatBubble(page);
-    await humanClick(customRangeTab, { force: true });
-    await page.waitForTimeout(300);
-  }
-  const dateInputs = page.locator('input[aria-label="Select a date range."]');
-  await dateInputs.nth(0).waitFor({ state: 'visible' });
-  const defaultStartValue = await dateInputs.nth(0).inputValue();
-  await dismissChatBubble(page);
-  await humanClick(dateInputs.nth(0));
-  await humanDelay(300, 600);
+  // Zweryfikowane na zywym DOM (zrzut od klienta, 2026-09-07): zewnetrzne pole "Przedzial
+  // czasowy raportu" to readonly <input> z placeholderem ("Wybierz przedzial czasowy
+  // raportu" / "Select time frame for report") i biezaca wartoscia w .value, opakowany w
+  // standardowe divy BaseWeb ("input"/"base-input"). UWAGA: przycisk
+  // data-testid="payment-time-range-picker-button" to NIE jest to pole (wczesniejsza
+  // poprawka mylila te dwa elementy) - to osobny, ZAGNIEZDZONY picker WEWNATRZ zakladki
+  // "Okno rozliczenia", patrz findMatchingSettlementWindowOption. Klikniecie tego pola
+  // rozwija panel z dwiema zakladkami: "Settlement window" (gotowe okna rozliczeniowe,
+  // domyslnie aktywna) i "Custom range" (edytowalne pola Start/End date). UWAGA: strona w
+  // tle ma WLASNY, INNY zestaw zakladek ("Zgloszenia"/"Harmonogramy" - historia
+  // raportow), wiec zwykle getByRole('tab').nth(1) trafia w niewlasciwy zestaw. Zakladki
+  // tla maja w id/aria-controls segment "reports/" (np.
+  // "tabs-bui1-tab-reports/report-schedules"), zakladki w panelu nie - filtrujemy po tym,
+  // zeby zawezic do panelu.
+  // .first() - uzasadnienie jak przy polu organizacji nizej (tryb strict Playwrighta).
+  const timeFrameTrigger = page
+    .getByPlaceholder(/select time frame for report|wybierz przedzia. czasowy raportu/i)
+    .first();
+  await timeFrameTrigger.waitFor({ state: 'visible' });
+  const readTimeFrameValue = async () => (await timeFrameTrigger.inputValue().catch(() => ''))?.trim();
+  // Uber czasem wypelnia to pole domyslnym zakresem (poprzednie okno rozliczeniowe) JUZ
+  // PRZED otwarciem panelu (zaobserwowane na zywo). Jesli ten domyslny zakres juz
+  // pokrywa sie z wyliczonym "from"/"to", pomijamy caly ponizszy taniec z zakladka
+  // "Custom range" i klikaniem w kalendarz - to najbardziej zawodna czesc calego flow
+  // (patrz komentarze przy selectUberCalendarDay/navigateCalendarMonths), a przy zgodnym
+  // zakresie jest calkowicie zbedna.
+  const prefilledRange = parseUberTimeRangeValue(await readTimeFrameValue());
+  const rangeAlreadyCorrect = prefilledRange?.from === from && prefilledRange?.to === to;
 
-  // Wpisywanie tekstu w te pola zawodzilo wielokrotnie (zobacz historie w komentarzach
-  // commitow) - klikamy bezposrednio w komorki kalendarza (jak w bolt.js), co jest
-  // bezposrednia zmiana stanu widgetu, bez zadnego parsowania/maskowania tekstu. Przed
-  // kazdym kliknieciem dnia nawigujemy kalendarz do wlasciwego miesiaca (patrz
-  // navigateCalendarMonths) - "from" i "to" moga wypasc w roznych miesiacach.
-  let currentYearMonth = yearMonthFromSlashDate(defaultStartValue);
-  const fromYearMonth = yearMonthFromIsoDate(from);
-  await navigateCalendarMonths(page, fromYearMonth - currentYearMonth);
-  currentYearMonth = fromYearMonth;
-  await selectUberCalendarDay(page, from);
-  await humanDelay(300, 600);
+  if (!rangeAlreadyCorrect) {
+    if (!(await ensureTimeFramePanelOpen(page, timeFrameTrigger))) {
+      throw new Error('Nie udalo sie rozwinac panelu "Przedzial czasowy raportu" (po kliknieciu w pole nie pojawily sie ani okno rozliczenia, ani pola zakresu dat).');
+    }
 
-  const toYearMonth = yearMonthFromIsoDate(to);
-  await navigateCalendarMonths(page, toYearMonth - currentYearMonth);
-  await selectUberCalendarDay(page, to);
-  await humanDelay(300, 600);
+    // Zakladka "Okno rozliczenia" (Settlement window) jest aktywna domyslnie zaraz po
+    // otwarciu panelu - klient poprosil, zeby automat na niej ZOSTAWAL i najpierw
+    // sprawdzil, czy szukanego okresu nie ma juz na gotowej liscie okien rozliczeniowych
+    // (rozwijanej zagniezdzonym pickerem - patrz findMatchingSettlementWindowOption).
+    // Dopiero gdy zadna pozycja z tej listy nie pasuje, przechodzimy na "Zakres
+    // niestandardowy" i wybieramy daty recznie w kalendarzu.
+    const settlementPicker = page.locator('[data-testid="payment-time-range-picker-button"]');
+    const settlementOption = await findMatchingSettlementWindowOption(page, settlementPicker, from, to);
+    if (settlementOption) {
+      await dismissChatBubble(page);
+      await humanClick(settlementOption);
+      await humanDelay(300, 600);
+      // Po wyborze okna zakres pokazuja DWA elementy: zewnetrzne pole "Przedzial czasowy
+      // raportu" i sam picker w zakladce. Uber nie zawsze aktualizuje oba natychmiast,
+      // wiec akceptujemy potwierdzenie z ktoregokolwiek z nich, zamiast wywracac cala
+      // probe przez chwilowy brak synchronizacji jednego z pol.
+      const matchesExpected = (value) => {
+        const parsed = parseUberTimeRangeValue(value);
+        return parsed?.from === from && parsed?.to === to;
+      };
+      const outerValue = await readTimeFrameValue();
+      const pickerValue = (await settlementPicker.textContent().catch(() => ''))?.trim();
+      if (!matchesExpected(outerValue) && !matchesExpected(pickerValue)) {
+        throw new Error(`Po wybraniu gotowego okna rozliczenia pole "Przedzial czasowy raportu" pokazuje "${outerValue}" (picker w zakladce: "${pickerValue}") zamiast oczekiwanego okresu ${from} - ${to}.`);
+      }
+      // Panel z zakladkami zostaje otwarty i zaslania pola ponizej (organizacje, przycisk
+      // "Wygeneruj") - musimy go zwinac, inaczej przechwyci kolejne kliknieca.
+      await collapseTimeFramePanel(page, timeFrameTrigger, log);
+    } else {
+      // Na liscie okien rozliczeniowych nie bylo szukanego okresu - zwijamy zagniezdzony
+      // picker (jego rozwinieta lista zaslania zakladki) i przechodzimy na "Zakres
+      // niestandardowy".
+      await collapseSettlementPicker(page, settlementPicker);
+      // Dopasowanie po pozycji (nth(1)) okazalo sie zawodne - prawdopodobnie animacja panelu
+      // chwilowo duplikuje/podmienia elementy zakladek w DOM. Dopasowujemy po dokladnym
+      // tekscie (oba zaobserwowane warianty jezykowe) i klikamy z force:true, na wypadek
+      // niewidocznej nakladki przechwytujacej kliknieca (obserwowane wczesniej przy innych
+      // elementach tego panelu).
+      const customRangeTab = page
+        .locator('[role="tab"]:not([id*="reports/"])')
+        .filter({ hasText: /^Custom range$|^Zakres niestandardowy$/i });
+      await customRangeTab.waitFor({ state: 'visible' });
+      for (let attempt = 0; attempt < 8; attempt++) {
+        if ((await customRangeTab.getAttribute('aria-selected')) === 'true') break;
+        await dismissChatBubble(page);
+        await humanClick(customRangeTab, { force: true });
+        await page.waitForTimeout(300);
+      }
+      const dateInputs = page.locator('input[aria-label="Select a date range."]');
+      await dateInputs.nth(0).waitFor({ state: 'visible' });
+      const defaultStartValue = await dateInputs.nth(0).inputValue();
+      await dismissChatBubble(page);
+      await humanClick(dateInputs.nth(0));
+      await humanDelay(300, 600);
 
-  for (const [input, isoDate, label] of [
-    [dateInputs.nth(0), from, 'Data rozpoczecia'],
-    [dateInputs.nth(1), to, 'Data zakonczenia'],
-  ]) {
-    const expected = toSlashDate(isoDate);
-    const actual = await input.inputValue();
-    if (actual !== expected) {
-      throw new Error(`Po kliknieciu w kalendarz pole daty "${label}" pokazuje "${actual}" zamiast oczekiwanego "${expected}" - wybor daty w Uberze najwyrazniej sie nie powiodl.`);
+      // Wpisywanie tekstu w te pola zawodzilo wielokrotnie (zobacz historie w komentarzach
+      // commitow) - klikamy bezposrednio w komorki kalendarza (jak w bolt.js), co jest
+      // bezposrednia zmiana stanu widgetu, bez zadnego parsowania/maskowania tekstu. Przed
+      // kazdym kliknieciem dnia nawigujemy kalendarz do wlasciwego miesiaca (patrz
+      // navigateCalendarMonths) - "from" i "to" moga wypasc w roznych miesiacach.
+      let currentYearMonth = yearMonthFromSlashDate(defaultStartValue);
+      const fromYearMonth = yearMonthFromIsoDate(from);
+      await navigateCalendarMonths(page, fromYearMonth - currentYearMonth);
+      currentYearMonth = fromYearMonth;
+      await selectUberCalendarDay(page, from);
+      await humanDelay(300, 600);
+
+      const toYearMonth = yearMonthFromIsoDate(to);
+      await navigateCalendarMonths(page, toYearMonth - currentYearMonth);
+      await selectUberCalendarDay(page, to);
+      await humanDelay(300, 600);
+
+      for (const [input, isoDate, label] of [
+        [dateInputs.nth(0), from, 'Data rozpoczecia'],
+        [dateInputs.nth(1), to, 'Data zakonczenia'],
+      ]) {
+        const expected = toSlashDate(isoDate);
+        const actual = await input.inputValue();
+        if (actual !== expected) {
+          throw new Error(`Po kliknieciu w kalendarz pole daty "${label}" pokazuje "${actual}" zamiast oczekiwanego "${expected}" - wybor daty w Uberze najwyrazniej sie nie powiodl.`);
+        }
+      }
+      // Wypelnienie pol otwiera kalendarz z potwierdzeniem wybranego zakresu (zweryfikowane
+      // na zywo: "Selected start date"/"Selected end date" w aria-label komorek - daty SA
+      // poprawnie ustawione, kalendarz to tylko widok do zamkniecia). Podobnie jak w
+      // react-datepicker uzywanym w bolt.js (selectReactDatepickerDay), popup kalendarza
+      // zamyka sie SAM po kliknieciu drugiego dnia zakresu - nie trzeba (i nie wolno) go
+      // zamykac Escape'em. UWAGA (2026-08-25, na zywo): Escape w tym miejscu byl
+      // interpretowany przez widget jako "anuluj wybor zakresu", a nie "zamknij widok" -
+      // powodowal cofniecie sie na ekran wyboru dat (zgloszone przez klienta jako "program
+      // wchodzi drugi raz w daty"/"wychodzi z ekranu generacji raportu"). Klikamy wiec od
+      // razu w pole-wyzwalacz, zeby zwinac zewnetrzny panel "Report time range".
+      // UWAGA (na zywo): to samo "first impression" okienko (patrz dismissChatBubble) potrafi
+      // tu wyskoczyc na pelnym ekranie z przyciemnionym tlem TUZ po wybraniu obu dat i
+      // zaslonic/przechwycic ten klik, zamrazajac formularz z wypelnionymi juz datami (zgloszone
+      // przez klienta jako "zatrzymal sie na wybraniu daty i dalej nie idzie").
+      await collapseTimeFramePanel(page, timeFrameTrigger, log);
     }
   }
-  // Wypelnienie pol otwiera kalendarz z potwierdzeniem wybranego zakresu (zweryfikowane
-  // na zywo: "Selected start date"/"Selected end date" w aria-label komorek - daty SA
-  // poprawnie ustawione, kalendarz to tylko widok do zamkniecia). Podobnie jak w
-  // react-datepicker uzywanym w bolt.js (selectReactDatepickerDay), popup kalendarza
-  // zamyka sie SAM po kliknieciu drugiego dnia zakresu - nie trzeba (i nie wolno) go
-  // zamykac Escape'em. UWAGA (2026-08-25, na zywo): Escape w tym miejscu byl
-  // interpretowany przez widget jako "anuluj wybor zakresu", a nie "zamknij widok" -
-  // powodowal cofniecie sie na ekran wyboru dat (zgloszone przez klienta jako "program
-  // wchodzi drugi raz w daty"/"wychodzi z ekranu generacji raportu"). Klikamy wiec od
-  // razu w pole-wyzwalacz, zeby zwinac zewnetrzny panel "Report time range".
-  // UWAGA (na zywo): to samo "first impression" okienko (patrz dismissChatBubble) potrafi
-  // tu wyskoczyc na pelnym ekranie z przyciemnionym tlem TUZ po wybraniu obu dat i
-  // zaslonic/przechwycic ten klik, zamrazajac formularz z wypelnionymi juz datami (zgloszone
-  // przez klienta jako "zatrzymal sie na wybraniu daty i dalej nie idzie").
-  await dismissChatBubble(page);
-  await humanClick(timeFrameTrigger);
 
   // Pole organizacji jest readonly (klikniecie otwiera liste, nie da sie wpisac tekstu).
   // Zweryfikowany na zywo polski placeholder "Wybierz organizacje, ktore chcesz
@@ -438,22 +850,43 @@ async function attemptGenerateUberReport(page, from, to, account) {
   // w Uberze) - kiedy lista ma dokladnie jedna organizacje (typowy przypadek), zaznaczamy
   // ja bezposrednio bez zadnego dopasowania tekstu. Dopiero przy wielu organizacjach
   // uzywamy account.company do wyboru wlasciwej.
-  const orgInput = page.getByPlaceholder(/select organizations to include in report|wybierz organizacje/i);
+  // .first(): gdyby ten sam placeholder wystapil na stronie wiecej niz raz (np. pozostaly
+  // w DOM popover z poprzedniej, nieudanej proby), tryb strict Playwrighta rzuca blad
+  // JESZCZE PRZED kliknieciem - z zewnatrz wyglada to dokladnie jak "automat nie klika w
+  // pole organizacji".
+  const orgInput = page
+    .getByPlaceholder(/select organizations to include in report|wybierz organizacje/i)
+    .first();
+  // Zabezpieczenie: gdyby panel "Przedzial czasowy raportu" mimo wszystko byl nadal
+  // otwarty, jest nakladka zaslaniajaca to wlasnie pole i przechwytuje ponizsze
+  // klikniecie (zgloszenie klienta 2026-09-07: "nie wybiera organizacji"). Wywolanie jest
+  // idempotentne - przy zamknietym panelu nie robi nic.
+  await collapseTimeFramePanel(page, timeFrameTrigger, log);
   await dismissChatBubble(page);
-  await humanClick(orgInput);
+  await clickEvenIfOverlaid(orgInput, 'Wybierz organizacje', log);
   await humanDelay(300, 700);
   // `label[data-baseweb="checkbox"]` bez zawezenia szuka na CALEJ stronie, nie tylko w tym
   // konkretnym popoverze - Base Web (ten sam system komponentow) jest uzywany w wielu
-  // miejscach aplikacji. Popover z lista organizacji renderuje sie przez React portal, ale
-  // wrapper wyzwalajacy go ma stabilny `aria-controls` wskazujacy na ID tego portalu -
-  // zawezamy wiec szukanie checkboxow do tego jednego, konkretnego kontenera zamiast do
-  // calej strony.
-  const orgTriggerWrapper = page.locator('span[aria-haspopup="true"]').filter({ has: orgInput });
-  const orgPopoverId = await orgTriggerWrapper.getAttribute('aria-controls');
-  if (!orgPopoverId) {
-    throw new Error('Nie udalo sie ustalic ID popovera z lista organizacji Uber (brak atrybutu aria-controls na wyzwalaczu) - struktura strony mogla sie zmienic.');
-  }
-  const orgLabels = page.locator(`#${orgPopoverId}`).locator('label[data-baseweb="checkbox"]');
+  // miejscach aplikacji. Popover z lista organizacji renderuje sie przez React portal, a
+  // wyzwalacz ma `aria-controls` wskazujacy na ID tego portalu - jesli uda sie go
+  // odczytac, zawezamy szukanie checkboxow do tego jednego kontenera.
+  //
+  // UWAGA (2026-09-07, zgloszenie klienta "nie klika pola organizacji"): wczesniej
+  // wymagalismy TWARDO wrappera <span aria-haspopup="true"> i bez niego przerywalismy cale
+  // generowanie bledem. Na zywym DOM pole organizacji ma jednak strukture BaseWeb bez tych
+  // atrybutow na spanie (<div data-baseweb="input"><div data-baseweb="base-input"><input
+  // readonly placeholder="Wybierz organizacje...">), wiec ten warunek wywracal caly krok.
+  // Teraz szukamy NAJBLIZSZEGO przodka z aria-controls niezaleznie od tagu, a gdy takiego
+  // nie ma - po prostu nie zawezamy (tak dzialal ten krok, zanim zawezenie dodano).
+  // Zawezenie jest optymalizacja, a nie warunkiem koniecznym.
+  const orgTriggerWrapper = orgInput.locator('xpath=ancestor::*[@aria-controls][1]');
+  const orgPopoverId =
+    (await orgTriggerWrapper.count().catch(() => 0)) > 0
+      ? await orgTriggerWrapper.first().getAttribute('aria-controls').catch(() => null)
+      : null;
+  const orgLabels = (orgPopoverId ? page.locator(`#${orgPopoverId}`) : page).locator(
+    'label[data-baseweb="checkbox"]'
+  );
   await orgLabels.first().waitFor({ state: 'visible' });
   const orgCount = await orgLabels.count();
   let orgLabel;
@@ -492,7 +925,7 @@ async function attemptGenerateUberReport(page, from, to, account) {
     throw new Error('Przycisk "Wygeneruj" jest nieaktywny (disabled) - formularz raportu ma niewypelnione/nieprawidlowe pole (np. organizacje).');
   }
   await dismissChatBubble(page);
-  await humanClick(generateButton);
+  await clickEvenIfOverlaid(generateButton, 'Wygeneruj', log);
   // Dialog "Wygeneruj raport" NIE zamyka sie sam po kliknieciu - zaslania tabele i blokuje
   // kliknieca w przycisk pobierania ponizej. Zamykamy go (zadanie generowania raportu jest
   // juz wyslane niezaleznie od stanu dialogu - nowy wiersz w tabeli pojawia sie ze statusem
@@ -516,7 +949,7 @@ async function generateUberReportWithRetry(page, from, to, account, statusCallba
     await humanClick(page.locator('[data-tracking-name="report-generation-initiated"]'));
     await humanDelay(400, 900);
     try {
-      await attemptGenerateUberReport(page, from, to, account);
+      await attemptGenerateUberReport(page, from, to, account, log);
       return;
     } catch (error) {
       lastError = error;

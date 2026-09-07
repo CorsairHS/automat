@@ -172,6 +172,18 @@ test.describe('validateDownloadedReport', () => {
     })).toThrow(ReportValidationError);
   });
 
+  test('Uber: przepuszcza plik "tydzien poprzedni" obejmujacy poniedzialek-poniedzialek (7 dni)', () => {
+    const { computePeriodRange } = require('../src/main/automation/dateRange');
+    const expected = computePeriodRange({ periodMode: 'previous_week' }, new Date(), { mondayToMonday: true });
+    const filename = `${expected.from.replace(/-/g, '')}-${expected.to.replace(/-/g, '')}-payments_driver-UNITY_DRIVE_SP_Z_O_O.csv`;
+    const filePath = path.join('C:', 'downloads', 'uber', 'x', filename);
+    expect(() => validateDownloadedReport({
+      platformId: 'uber',
+      account: baseAccount({ periodMode: 'previous_week', periodFrom: undefined, periodTo: undefined, company: 'UNITY DRIVE' }),
+      filePath,
+    })).not.toThrow();
+  });
+
   test('blokuje niespojnosc etykiety konta z miastem', () => {
     const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
     expect(() => validateDownloadedReport({

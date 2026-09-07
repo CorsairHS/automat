@@ -133,13 +133,19 @@ function validateDownloadedReport({ platformId, account, filePath }) {
   // Nadal chroni to przed uploadem nieaktualnego/zlego raportu (np. sprzed wielu
   // tygodni przez blad sesji), tylko bez twardego blokowania normalnej,
   // dzialajacej pracy platformy.
+  // Uber rozlicza okresy poniedzialek-poniedzialek (7 dni) - patrz komentarz przy
+  // `mondayToMonday` w dateRange.js oraz analogiczne wywolanie w platforms/uber.js.
   const expected = platformId === 'boltfood'
     ? computePeriodRange({ periodMode: 'previous_week' })
-    : computePeriodRange({
-        periodMode: account.periodMode,
-        periodFrom: account.periodFrom,
-        periodTo: account.periodTo,
-      });
+    : computePeriodRange(
+        {
+          periodMode: account.periodMode,
+          periodFrom: account.periodFrom,
+          periodTo: account.periodTo,
+        },
+        new Date(),
+        { mondayToMonday: platformId === 'uber' }
+      );
 
   if (parsed.periodStart !== expected.from || parsed.periodEnd !== expected.to) {
     throw new ReportValidationError(

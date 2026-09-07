@@ -22,7 +22,15 @@ function getMondayOfWeek(date) {
   return result;
 }
 
-function computePeriodRange({ periodMode, periodFrom, periodTo }, now = new Date()) {
+/**
+ * `mondayToMonday`: Uber rozlicza okresy tygodniowe od poniedzialku 4:01 do KOLEJNEGO
+ * poniedzialku 4:01 (7 dni, nie 6) - potwierdzone na zywym DOM (pole "Report time range":
+ * "24 sierpnia - 31 sierpnia") i w nazwach pobranych plikow (np.
+ * "20260824-20260831-payments_driver..."). Pozostale platformy (Bolt/FreeNow/Bolt Food)
+ * uzywaja standardowego tygodnia poniedzialek-niedziela, wiec ta opcja domyslnie jest
+ * wylaczona.
+ */
+function computePeriodRange({ periodMode, periodFrom, periodTo }, now = new Date(), { mondayToMonday = false } = {}) {
   if (periodMode === 'custom') {
     if (!periodFrom || !periodTo) {
       throw new Error('Zakres niestandardowy wymaga ustawionych dat "od" i "do".');
@@ -37,14 +45,14 @@ function computePeriodRange({ periodMode, periodFrom, periodTo }, now = new Date
     throw new Error(`Nieznany tryb okresu: ${periodMode}`);
   }
 
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
+  const weekEnd = new Date(monday);
+  weekEnd.setDate(weekEnd.getDate() + (mondayToMonday ? 7 : 6));
 
   // Platformy (np. Bolt) nie maja danych za dni, ktore jeszcze nie nastapily - dla
-  // "tydzien biezacy" ograniczamy koniec zakresu do dzisiaj, jesli niedziela tego
-  // tygodnia jeszcze nie nadeszla.
+  // "tydzien biezacy" ograniczamy koniec zakresu do dzisiaj, jesli koniec tego tygodnia
+  // jeszcze nie nadszedl.
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const to = periodMode === 'current_week' && sunday > today ? today : sunday;
+  const to = periodMode === 'current_week' && weekEnd > today ? today : weekEnd;
 
   return { from: toISODate(monday), to: toISODate(to) };
 }
