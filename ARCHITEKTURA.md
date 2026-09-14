@@ -138,5 +138,9 @@ pobraniu, przed dopisaniem pliku do `lastDownloads`:
   zakladaniu konta, ale swiadomie nie chroni przed pobraniem danych dla zlego konta na
   samej platformie - patrz `docs/superpowers/specs/2026-09-01-report-validation-city-week-design.md`).
 
-Kazda niezgodnosc = twarda blokada (plik nie trafia do `lastDownloads`, wiec nie moze
-zostac wgrany), zgodnie z decyzja klienta ("nie chcemy, zeby to cos popsulo").
+Zly tydzien, zla firma i nierozpoznana nazwa pliku to nadal twarda blokada (plik nie
+trafia do `lastDownloads`, wiec nie moze zostac wgrany), zgodnie z decyzja klienta ("nie
+chcemy, zeby to cos popsulo"). Regula "etykieta konta zawiera miasto" jest od
+2026-09-14 tylko ostrzezeniem (wsparcie wielu partnerow zmienilo sposob konfiguracji
+kont) - plik i tak trafia do `lastDownloads` i moze zostac wgrany, a ostrzezenie widac
+w statusie konta w GUI (doklejone do "Gotowe: ...") oraz w logu.

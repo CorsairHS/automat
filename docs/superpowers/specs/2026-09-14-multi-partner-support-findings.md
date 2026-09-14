@@ -64,7 +64,10 @@ Zly UX, podatny na bledy.
 
 Zaimplementowane wg planu `docs/superpowers/plans/2026-09-14-multi-partner-support.md`:
 adres panelu jest polem konta PartnerTax (migracja istniejacych kont Nova przy starcie),
-ID System/City/Company sa odczytywane z szablonu formsetu i dopasowywane po tekscie
-(dokladny tekst > normalizacja, niejednoznacznosc = blad). Regula "etykieta zawiera
-miasto" jest ostrzezeniem. Niezweryfikowane na drugiej instalacji: filtr "False" na
-liscie rozliczen.
+ID System/City/Company sa odczytywane z szablonu formsetu i dopasowywane po tekscie w
+`src/main/automation/optionMatching.js` (dokladny tekst kolejnych kandydatow > rownosc
+po normalizacji `normalizeForCompare` > dla Company, jako jedynego pola, dodatkowo
+jednoznaczne dopasowanie "zawiera" gdy nic nie trafi dokladnie - patrz
+`findContainingOptions`; niejednoznacznosc na kazdym etapie = blad). Regula "etykieta
+zawiera miasto" jest ostrzezeniem. Niezweryfikowane na drugiej instalacji: filtr "False"
+na liscie rozliczen.

@@ -233,7 +233,7 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
       downloadedAt: new Date().toISOString(),
     });
     logger.info(`${logPrefix} sukces: ${result.filePath}`);
-    return { ok: true, filePath: result.filePath };
+    return { ok: true, filePath: result.filePath, warnings };
   } catch (error) {
     logger.error(`${logPrefix} blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
