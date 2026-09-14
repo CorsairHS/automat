@@ -108,6 +108,14 @@ app.whenReady().then(() => {
   logger.init(app.getPath('userData'));
   logger.info('Aplikacja wystartowala.');
 
+  try {
+    if (credentialStore.runMigrations()) {
+      logger.info('Migracja magazynu kont zakonczona.');
+    }
+  } catch (error) {
+    logger.error(`Migracja magazynu kont nie powiodla sie: ${error.stack || error.message}`);
+  }
+
   if (!safeStorage.isEncryptionAvailable()) {
     logger.warn('safeStorage encryption niedostepne na tym systemie - dane logowania bylyby zapisywane bez szyfrowania.');
   }

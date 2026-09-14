@@ -5,6 +5,7 @@ const FIELD_LABELS = {
   clientId: 'Client ID',
   clientSecret: 'Client Secret',
   orgId: 'ID organizacji/firmy (z URL panelu po przelaczeniu firmy, np. /fleet/<ORG_ID>/)',
+  baseUrl: 'Adres panelu PartnerTax (np. https://app.twoja-firma.pl)',
 };
 
 const FIELD_TYPES = {
@@ -14,6 +15,7 @@ const FIELD_TYPES = {
   clientId: 'text',
   clientSecret: 'password',
   orgId: 'text',
+  baseUrl: 'text',
 };
 
 let CONFIG = null;

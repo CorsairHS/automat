@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { app, safeStorage } = require('electron');
 const { PLATFORMS } = require('./platforms');
+const { applyLegacyBaseUrlMigration } = require('./partnerTaxConfig');
 
 const FILE_NAME = 'credentials.enc.json';
 
@@ -135,9 +136,30 @@ function deleteAccount(platformId, accountId) {
   writeRaw(store);
 }
 
+/**
+ * Jednorazowe migracje formatu magazynu, uruchamiane przy starcie aplikacji. Czyta plik
+ * scisle (bez fallbacku readRaw na {}), zeby uszkodzony plik nigdy nie zostal nadpisany
+ * automatycznie - wtedy migracja jest pomijana i ponawiana przy nastepnym starcie.
+ */
+function runMigrations() {
+  const filePath = getFilePath();
+  let raw = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+  const { store, changed } = applyLegacyBaseUrlMigration(raw);
+  if (changed) writeRaw(store);
+  return changed;
+}
+
 module.exports = {
   listAccounts,
   saveAccount,
   setPeriodModeForAll,
   deleteAccount,
+  runMigrations,
 };

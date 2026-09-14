@@ -60,10 +60,9 @@ const PLATFORMS = [
   {
     id: 'partnertax',
     label: 'PartnerTax Admin',
-    fields: ['username', 'password'],
+    fields: ['baseUrl', 'username', 'password'],
     sensitiveFields: ['password'],
     multiAccount: false,
-    loginUrl: 'https://app.nova-partner.pl/admin/'
   },
 ];
 
