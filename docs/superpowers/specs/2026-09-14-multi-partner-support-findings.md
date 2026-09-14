@@ -62,6 +62,9 @@ Zly UX, podatny na bledy.
 
 ## Status
 
-Wnioski zebrane, implementacja nie zaczeta. Nastepny krok (do potwierdzenia
-z uzytkownikiem): refaktor `partnertax.js` na dopasowanie po tekscie opcji +
-wyniesienie `loginUrl` do konfiguracji per-konto.
+Zaimplementowane wg planu `docs/superpowers/plans/2026-09-14-multi-partner-support.md`:
+adres panelu jest polem konta PartnerTax (migracja istniejacych kont Nova przy starcie),
+ID System/City/Company sa odczytywane z szablonu formsetu i dopasowywane po tekscie
+(dokladny tekst > normalizacja, niejednoznacznosc = blad). Regula "etykieta zawiera
+miasto" jest ostrzezeniem. Niezweryfikowane na drugiej instalacji: filtr "False" na
+liscie rozliczen.
