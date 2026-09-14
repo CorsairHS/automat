@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   listAccounts: (platformId, group) => ipcRenderer.invoke('accounts:list', platformId, group),
   saveAccount: (platformId, account) => ipcRenderer.invoke('accounts:save', platformId, account),
   deleteAccount: (platformId, accountId) => ipcRenderer.invoke('accounts:delete', platformId, accountId),
+  setPeriodModeForAll: (periodMode, group) => ipcRenderer.invoke('accounts:setPeriodModeAll', periodMode, group),
   duplicateToGuarantor: (platformId, accountId) => ipcRenderer.invoke('accounts:duplicateToGuarantor', platformId, accountId),
   runSync: (platformId, accountId) => ipcRenderer.invoke('sync:run', platformId, accountId),
   onSyncStatus: (callback) => {

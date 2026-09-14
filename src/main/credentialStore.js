@@ -106,6 +106,28 @@ function saveAccount(platformId, account) {
   return entry.accountId;
 }
 
+/**
+ * Ustawia ten sam tryb okresu (np. 'previous_week') na wszystkich kontach podanych
+ * platform w danej grupie ('default' / 'gwarant'). Operuje na surowym magazynie - nie
+ * odszyfrowuje ani nie przepisuje pol (hasel), zmienia wylacznie periodMode i czysci
+ * zakres niestandardowy. Zwraca liczbe zmienionych kont.
+ */
+function setPeriodModeForAll(platformIds, group, periodMode) {
+  const store = readRaw();
+  let changed = 0;
+  for (const platformId of platformIds) {
+    for (const account of store[platformId] || []) {
+      if ((account.group || 'default') !== group) continue;
+      account.periodMode = periodMode;
+      account.periodFrom = null;
+      account.periodTo = null;
+      changed += 1;
+    }
+  }
+  writeRaw(store);
+  return changed;
+}
+
 function deleteAccount(platformId, accountId) {
   const store = readRaw();
   const accounts = store[platformId] || [];
@@ -116,5 +138,6 @@ function deleteAccount(platformId, accountId) {
 module.exports = {
   listAccounts,
   saveAccount,
+  setPeriodModeForAll,
   deleteAccount,
 };

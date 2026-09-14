@@ -29,13 +29,49 @@ autoUpdater.on('update-not-available', () => {
   sendUpdateStatus({ state: 'not-available', message: `Masz najnowsza wersje (${app.getVersion()}).` });
 });
 autoUpdater.on('update-downloaded', (info) => {
+  updateDownloaded = true;
   logger.info(`[update] pobrano wersje ${info.version} - zostanie zainstalowana przy nastepnym uruchomieniu aplikacji.`);
   sendUpdateStatus({ state: 'downloaded', message: `Pobrano wersje ${info.version} - gotowe do instalacji.`, version: info.version });
 });
 autoUpdater.on('error', (error) => {
   logger.error(`[update] blad: ${error.stack || error.message}`);
-  sendUpdateStatus({ state: 'error', message: `Blad sprawdzania aktualizacji: ${error.message}` });
+  sendUpdateStatus({ state: 'error', message: `Blad sprawdzania aktualizacji: ${shortUpdateError(error)}` });
+  scheduleUpdateRetry();
 });
+
+// Blad HTTP z electron-updatera zawiera w message cala strone HTML odpowiedzi GitHuba
+// (np. "500 ... Data: <!DOCTYPE html>...") - partner widzial w zakladce sciane tekstu.
+// Pelna tresc idzie do logu, w oknie zostaje sam status i adres.
+function shortUpdateError(error) {
+  const firstPart = String(error.message || error).split(/\r?\n\s*\r?\n\s*Data:/)[0];
+  const oneLine = firstPart.replace(/\\n|\s+/g, ' ').trim();
+  return oneLine.length > 200 ? `${oneLine.slice(0, 200)}...` : oneLine;
+}
+
+// Zgloszenie 2026-09-14 (wersja 1.0.8): wydanie na GitHubie jest publiczne od razu, a pliki
+// (latest.yml, instalator) dogrywaja sie jeszcze kilkanascie sekund - apka klienta sprawdzila
+// w tym oknie (albo trafila na chwilowe 500 GitHuba) i dostala blad. Wczesniej sprawdzalismy
+// tylko przy starcie, wiec klient bez restartu juz nigdy nie dostal aktualizacji. Teraz po
+// bledzie ponawiamy po kilku minutach, a niezaleznie sprawdzamy cyklicznie co kilka godzin.
+const UPDATE_RETRY_DELAY_MS = 5 * 60 * 1000;
+const UPDATE_PERIODIC_INTERVAL_MS = 4 * 60 * 60 * 1000;
+let updateRetryTimer = null;
+let updateDownloaded = false;
+
+function checkForUpdatesSafely() {
+  if (!app.isPackaged || updateDownloaded) return;
+  autoUpdater.checkForUpdates().catch(() => {
+    // Blad jest juz obsluzony w autoUpdater.on('error') (log + status + ponowienie).
+  });
+}
+
+function scheduleUpdateRetry() {
+  if (!app.isPackaged || updateDownloaded || updateRetryTimer) return;
+  updateRetryTimer = setTimeout(() => {
+    updateRetryTimer = null;
+    checkForUpdatesSafely();
+  }, UPDATE_RETRY_DELAY_MS);
+}
 
 process.on('uncaughtException', (error) => {
   logger.error(`Nieobsluzony wyjatek: ${error.stack || error.message}`);
@@ -85,7 +121,8 @@ app.whenReady().then(() => {
   // Sprawdzanie aktualizacji tylko dla spakowanej apki - w trybie dev (npm start) nie ma
   // wygenerowanych metadanych update'u i electron-updater i tak by od razu zglosil blad.
   if (app.isPackaged) {
-    autoUpdater.checkForUpdates();
+    checkForUpdatesSafely();
+    setInterval(checkForUpdatesSafely, UPDATE_PERIODIC_INTERVAL_MS);
   }
 });
 
@@ -124,6 +161,17 @@ ipcMain.handle('accounts:save', (_event, platformId, account) => {
 ipcMain.handle('accounts:delete', (_event, platformId, accountId) => {
   credentialStore.deleteAccount(platformId, accountId);
   return { ok: true };
+});
+
+// Przycisk "Wszystkie konta: tydzien poprzedni/biezacy" (renderer.js) - hurtowa zmiana
+// trybu okresu na kontach wszystkich platform z raportami (Uber/Bolt/FreeNow/Bolt Food).
+ipcMain.handle('accounts:setPeriodModeAll', (_event, periodMode, group = 'default') => {
+  if (!['current_week', 'previous_week'].includes(periodMode)) {
+    return { ok: false, error: `Nieobslugiwany tryb okresu: ${periodMode}` };
+  }
+  const platformIds = PLATFORMS.filter((p) => p.multiAccount && p.report).map((p) => p.id);
+  const count = credentialStore.setPeriodModeForAll(platformIds, group, periodMode);
+  return { ok: true, count };
 });
 
 // Duplikuje istniejace konto (dowolnej grupy) do zakladki Gwarant jako NOWY, niezalezny
@@ -339,7 +387,7 @@ ipcMain.handle('update:check', async () => {
     return { ok: true };
   } catch (error) {
     logger.error(`[update] blad recznego sprawdzenia: ${error.stack || error.message}`);
-    return { ok: false, error: error.message };
+    return { ok: false, error: `Blad sprawdzania aktualizacji: ${shortUpdateError(error)}` };
   }
 });
 

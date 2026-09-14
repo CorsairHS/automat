@@ -319,6 +319,54 @@ function appendOrReplaceSection(section) {
  * w biezacej sesji aplikacji (main.js -> lastDownloads), nie da sie go zaznaczyc recznie -
  * ma to byc realna weryfikacja "czy wszystko sie pobralo", nie tylko notatka.
  */
+/**
+ * Wiersz z przyciskami hurtowej zmiany okresu ("Wszystkie konta: tydzien poprzedni /
+ * biezacy") - dla kont z grupy `group` ('default' w Kontroli pobran, 'gwarant' w zakladce
+ * Gwarant). Po zmianie przebudowuje widok (render), zeby karty kont pokazaly nowy okres, i
+ * wstawia komunikat do NOWEGO wiersza (stary jest wtedy odlaczony od DOM).
+ */
+function buildBulkPeriodModeRow(group) {
+  const row = document.createElement('div');
+  row.className = 'run-row';
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+  statusSpan.dataset.bulkPeriodStatus = group;
+
+  const modes = [
+    { id: 'previous_week', label: 'Wszystkie konta: tydzien poprzedni' },
+    { id: 'current_week', label: 'Wszystkie konta: tydzien biezacy' },
+  ];
+  const buttons = modes.map(({ id, label }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-secondary';
+    btn.textContent = label;
+    btn.onclick = async () => {
+      const modeLabel = label.replace('Wszystkie konta: ', '');
+      if (!window.confirm(`Ustawic okres "${modeLabel}" na WSZYSTKICH kontach${group === 'gwarant' ? ' w zakladce Gwarant' : ''}? Konta z zakresem niestandardowym tez zostana zmienione.`)) {
+        return;
+      }
+      for (const b of buttons) b.disabled = true;
+      statusSpan.textContent = 'Zmieniam okres...';
+      const result = await window.api.setPeriodModeForAll(id, group);
+      if (!result.ok) {
+        for (const b of buttons) b.disabled = false;
+        statusSpan.textContent = `Blad: ${result.error}`;
+        return;
+      }
+      await render();
+      const refreshed = document.querySelector(`[data-bulk-period-status="${group}"]`);
+      if (refreshed) refreshed.textContent = `Ustawiono "${modeLabel}" na ${result.count} kontach.`;
+    };
+    return btn;
+  });
+
+  for (const btn of buttons) row.appendChild(btn);
+  row.appendChild(statusSpan);
+  return row;
+}
+
 async function renderChecklistSection() {
   const downloads = await window.api.getDownloadsStatus();
   const downloadedMap = new Map(downloads.map((d) => [`${d.platformId}:${d.accountId}`, d]));
@@ -354,6 +402,7 @@ async function renderChecklistSection() {
     runRow.appendChild(runBtn);
     runRow.appendChild(statusSpan);
     section.appendChild(runRow);
+    section.appendChild(buildBulkPeriodModeRow('default'));
   }
 
   if (reportAccountsCache.length === 0) {
@@ -514,6 +563,7 @@ async function renderGwarantChecklist() {
   runRow.appendChild(runBtn);
   runRow.appendChild(statusSpan);
   section.appendChild(runRow);
+  section.appendChild(buildBulkPeriodModeRow('gwarant'));
 
   const list = document.createElement('div');
   list.className = 'checklist-list';

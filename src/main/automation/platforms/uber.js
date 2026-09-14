@@ -1,7 +1,7 @@
 const path = require('path');
 const { computePeriodRange } = require('../dateRange');
-const { waitForAuthStateToSettle, waitForLoginCompletion, SAFE_TO_HELP_MARKER } = require('../loginHelpers');
-const { humanClick, humanFill, humanDelay } = require('../humanInteraction');
+const { waitForAuthStateToSettle, SAFE_TO_HELP_MARKER } = require('../loginHelpers');
+const { humanClick, humanDelay } = require('../humanInteraction');
 
 const LOGIN_URL = 'https://supplier.uber.com/';
 
@@ -36,21 +36,28 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     // 2026-08-25). Zamiast zgadywac strukture, uzywamy stabilnego id="forward-button"
     // (potwierdzone na zywym DOM dla kroku 1 - "Dalej"), z fallbackiem na
     // button[type="submit"]/bez atrybutu w formularzu, gdyby ten id kiedys zniknal.
+    // Krotki limit czasu (zamiast domyslnych 30 s): "Dalej" jest WYLACZONE, dopoki pole na
+    // ekranie jest puste - czekanie nic nie da, a blad klikniecia wywracal cala
+    // synchronizacje (klient, 2026-09-14). Wywolujacy lapie blad i naprawia stan pola.
     const clickContinueButton = async (fieldLocator, frame = page) => {
       const byId = frame.locator('#forward-button');
       if (await byId.isVisible().catch(() => false)) {
-        await humanClick(byId);
+        await humanClick(byId, { timeout: 5000 });
         return;
       }
       const formSubmit = fieldLocator.locator('xpath=ancestor::form').locator('button[type="submit"], button:not([type])');
-      await humanClick(formSubmit);
+      await humanClick(formSubmit, { timeout: 5000 });
     };
 
     log('Loguje sie do Ubera (krok 1/2: email)...');
     const emailInput = page.locator('#PHONE_NUMBER_or_EMAIL_ADDRESS');
-    await humanFill(emailInput, account.fields.email);
+    await emailInput.waitFor({ state: 'visible', timeout: 30000 });
+    await typeIntoLoginField(page, emailInput, account.fields.email, 'Email/telefon', log).catch((error) =>
+      log(`Wpisanie emaila nie powiodlo sie (${error.message.split('\n')[0]}) - ponowie w kolejnym kroku.`)
+    );
     await dismissChatBubble(page);
-    await clickContinueButton(emailInput);
+    // Blad (np. wylaczone "Dalej") obsluzy petla ponawiania ponizej (waitForStep1Outcome).
+    await clickContinueButton(emailInput).catch(() => {});
 
     // Klikniecie "Dalej" bywa "polykane" (np. strona jeszcze nie w pelni podpieta pod
     // handler, chwilowa nakladka) - ponawianie tego klikniecia jest bezpieczne, GDY krok
@@ -78,7 +85,7 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     const STEP1_TIMEOUT_MS = 5 * 60 * 1000;
     const step1Result = await waitForStep1Outcome(
       page,
-      { emailInput, isLoggedIn, clickContinueButton },
+      { emailInput, email: account.fields.email, isLoggedIn, clickContinueButton },
       STEP1_TIMEOUT_MS,
       log
     );
@@ -87,13 +94,13 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
     }
 
     if (step1Result.outcome === 'password') {
-      const { locator: passwordInput, frame: passwordFrame } = step1Result;
       log('Loguje sie do Ubera (krok 2/2: haslo)...');
-      await humanFill(passwordInput, account.fields.password);
-      await dismissChatBubble(page);
-      await clickContinueButton(passwordInput, passwordFrame);
-
-      const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });
+      const loggedIn = await completePasswordStep(
+        page,
+        { isLoggedIn, clickContinueButton, password: account.fields.password },
+        STEP1_TIMEOUT_MS,
+        log
+      );
       if (!loggedIn) {
         throw new Error('Logowanie do Ubera nie powiodlo sie w wyznaczonym czasie (mozliwe 2FA wymagajace recznej interwencji).');
       }
@@ -267,6 +274,82 @@ const isArkoseChallengeVisible = (page) =>
   page.locator('#arkose-challenge, [data-e2e="enforcement-frame"]').first().isVisible().catch(() => false);
 
 /**
+ * Czy element lezy NA WIERZCHU (nic go nie zaslania) - sprawdzane przez
+ * document.elementFromPoint w srodku elementu. Za "na wierzchu" uznajemy tez trafienie w
+ * element wewnatrz tej samej obudowy pola (np. ikona "pokaz haslo").
+ */
+async function isElementOnTop(locator) {
+  return locator
+    .evaluate(
+      (el) => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return false;
+        const top = el.ownerDocument.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        if (!top) return false;
+        const container = el.closest('[data-baseweb="input"]') || el.parentElement || el;
+        return top === el || container.contains(top);
+      },
+      undefined,
+      { timeout: 2000 }
+    )
+    .catch(() => false);
+}
+
+/**
+ * Czy weryfikacja Arkose FAKTYCZNIE blokuje ekran. Zgloszenie klienta (2026-09-14, druga
+ * runda): po rozwiazaniu zagadki na ekranie byl juz formularz hasla (id="PASSWORD"), a
+ * automat nadal nic nie wpisywal. Sama widocznosc kontenera Arkose w rozumieniu Playwrighta
+ * nie wystarcza - po rozwiazaniu zagadki kontener/iframe potrafi zostac w DOM (np.
+ * przezroczysty albo pod formularzem), a Playwright nie uwzglednia przykrycia ani
+ * przezroczystosci, wiec automat czekal w nieskonczonosc na "znikniecie" weryfikacji.
+ * Dlatego: jesli pole hasla jest widoczne i lezy na wierzchu - weryfikacja nie blokuje,
+ * niezaleznie od tego, co zostalo w DOM.
+ */
+async function isArkoseChallengeBlocking(page, passwordMatch, otherFormFields = []) {
+  if (!(await isArkoseChallengeVisible(page))) return false;
+  if (passwordMatch && (await isElementOnTop(passwordMatch.locator))) return false;
+  // To samo dla ekranu email (krok 1), gdyby Uber po weryfikacji wrocil wlasnie tam.
+  for (const field of otherFormFields) {
+    if ((await field.isVisible().catch(() => false)) && (await isElementOnTop(field))) return false;
+  }
+  return true;
+}
+
+/**
+ * Wpisuje tekst w pole logowania (email albo haslo) i sprawdza, czy pole faktycznie go
+ * zawiera. Najpierw "po ludzku" (klikniecie + wpisywanie znak po znaku bezposrednio w to
+ * pole), a gdy to zawiedzie (przechwycone klikniecie, fokus w innym miejscu, pole
+ * wyczyszczone przez strone) - wypelnienie pola bezposrednio przez Playwright.
+ * Wczesniejsze humanFill wpisywalo przez page.keyboard, czyli do elementu, ktory akurat
+ * MIAL fokus - jesli klikniecie w pole nie przeszlo, znaki trafialy donikad. Wartosci nie
+ * logujemy (haslo!) - tylko liczbe znakow.
+ */
+async function typeIntoLoginField(page, input, text, label, log) {
+  await dismissChatBubble(page);
+  try {
+    await humanClick(input, { timeout: 3000 });
+  } catch {
+    await input.focus({ timeout: 2000 }).catch(() => {});
+  }
+  try {
+    await input.fill('', { timeout: 3000 });
+    await input.pressSequentially(text, { delay: 60, timeout: 15000 });
+  } catch {
+    // Obsluzone ponizej przez sprawdzenie wartosci.
+  }
+  let typedLength = (await input.inputValue({ timeout: 2000 }).catch(() => '')).length;
+  if (typedLength !== text.length) {
+    log(`Wpisywanie pola "${label}" znak po znaku nie powiodlo sie (w polu ${typedLength} z ${text.length} znakow) - wypelniam pole bezposrednio.`);
+    await input.fill(text, { timeout: 5000, force: true });
+    typedLength = (await input.inputValue({ timeout: 2000 }).catch(() => '')).length;
+    if (typedLength !== text.length) {
+      throw new Error(`pole "${label}" zawiera ${typedLength} z ${text.length} znakow`);
+    }
+  }
+  await humanDelay(200, 500);
+}
+
+/**
  * Szuka widocznego elementu pasujacego do selektora we WSZYSTKICH ramkach strony (nie
  * tylko glownej `page`). Zaobserwowany na zywym DOM modal Arkose (patrz
  * isArkoseChallengeVisible) osadza iframe z adresu innej subdomeny ("auth.uber.com" w
@@ -322,7 +405,7 @@ async function findVisibleInAnyFrame(page, selector) {
  * rozne przypadki tym samym mechanizmem: (1) zwykle polkniete klikniecie tuz po
  * wypelnieniu emaila, (2) powrot do ekranu email PO rozwiazaniu weryfikacji Arkose.
  */
-async function waitForStep1Outcome(page, { emailInput, isLoggedIn, clickContinueButton }, timeoutMs, log) {
+async function waitForStep1Outcome(page, { emailInput, email, isLoggedIn, clickContinueButton }, timeoutMs, log) {
   const CLICK_COOLDOWN_MS = 8000;
   const deadline = Date.now() + timeoutMs;
   let captchaMessageShown = false;
@@ -330,7 +413,8 @@ async function waitForStep1Outcome(page, { emailInput, isLoggedIn, clickContinue
   let lastClickAt = Date.now();
 
   while (Date.now() < deadline) {
-    if (await isArkoseChallengeVisible(page)) {
+    const passwordMatch = await findVisibleInAnyFrame(page, '#PASSWORD, input[type="password"]');
+    if (await isArkoseChallengeBlocking(page, passwordMatch, [emailInput])) {
       if (!captchaMessageShown) {
         log(`${SAFE_TO_HELP_MARKER} Uber pokazuje weryfikacje "Ochrona konta" (puzzle Arkose) - rozwiaz ja recznie w oknie przegladarki ("Rozpocznij zadanie" -> dopasuj obrazki). Automat czeka i sam wykryje zakonczenie.`);
         captchaMessageShown = true;
@@ -339,17 +423,39 @@ async function waitForStep1Outcome(page, { emailInput, isLoggedIn, clickContinue
       await page.waitForTimeout(500);
       continue;
     }
-    const passwordMatch = await findVisibleInAnyFrame(page, '#PASSWORD, input[type="password"]');
     if (passwordMatch) return { outcome: 'password', ...passwordMatch };
     if (await isLoggedIn()) return { outcome: 'loggedIn' };
 
     const emailStepVisible = await emailInput.isVisible().catch(() => false);
+    // Ani email, ani haslo, ani weryfikacja - Uber pokazuje inny ekran, najczesciej kod SMS
+    // wysylany od razu po emailu (zaobserwowane 2026-09-14 na koncie testowym). Automat nie
+    // zna kodu, wiec prosimy partnera o wpisanie go i czekamy - po kodzie Uber albo loguje od
+    // razu, albo pokazuje ekran hasla, ktory ta petla wykryje sama.
+    if (!emailStepVisible && !helpMessageShown && Date.now() - lastClickAt >= 5000) {
+      log(`${SAFE_TO_HELP_MARKER} Uber prosi o dodatkowe potwierdzenie (np. kod SMS) - wpisz je recznie w oknie przegladarki. Automat czeka i sam przejdzie dalej (haslo wpisze sam, jesli Uber o nie poprosi).`);
+      helpMessageShown = true;
+    }
     if (emailStepVisible && Date.now() - lastClickAt >= CLICK_COOLDOWN_MS) {
       log(captchaMessageShown
         ? 'Ekran logowania wrocil do podania emaila/telefonu po weryfikacji - ponawiam klikniecie "Dalej"...'
         : 'Krok logowania (email) nie przeszedl dalej - ponawiam klikniecie "Dalej"...');
-      await dismissChatBubble(page);
-      await clickContinueButton(emailInput);
+      // Zgloszenie klienta (2026-09-14): po weryfikacji Uber wrocil do ekranu email z
+      // PUSTYM polem - "Dalej" bylo wtedy wylaczone (disabled), a automat przez 30 s
+      // probowal je kliknac i przerywal cala synchronizacje. Przed kliknieciem sprawdzamy
+      // wiec zawartosc pola i w razie potrzeby wpisujemy email od nowa; blad pojedynczej
+      // proby nie przerywa logowania - kolejny obieg petli sprobuje ponownie.
+      try {
+        const currentEmail = await emailInput.inputValue({ timeout: 2000 }).catch(() => '');
+        const normalize = (value) => value.replace(/\s+/g, '').toLowerCase();
+        if (normalize(currentEmail) !== normalize(email)) {
+          log('Pole email/telefon jest puste lub niepelne - wpisuje je ponownie...');
+          await typeIntoLoginField(page, emailInput, email, 'Email/telefon', log);
+        }
+        await dismissChatBubble(page);
+        await clickContinueButton(emailInput);
+      } catch (error) {
+        log(`Ponowienie kroku email nie powiodlo sie (${error.message.split('\n')[0]}) - sprobuje ponownie.`);
+      }
       lastClickAt = Date.now();
       if (!helpMessageShown) {
         // Informujemy o mozliwosci recznej pomocy dopiero po pierwszym nieudanym
@@ -363,6 +469,84 @@ async function waitForStep1Outcome(page, { emailInput, isLoggedIn, clickContinue
     await page.waitForTimeout(300);
   }
   return null;
+}
+
+/**
+ * Prowadzi krok 2 logowania (haslo) az do zalogowania. Zgloszenie klienta (2026-09-14):
+ * po weryfikacji "Ochrona konta" (Arkose) Uber wrocil do ekranu "Witamy ponownie. Zaloguj
+ * sie, aby kontynuowac." z PUSTYM polem hasla, a automat nic nie wpisal - wczesniej haslo
+ * bylo wpisywane dokladnie raz, a potem automat juz tylko biernie czekal na zalogowanie
+ * (waitForLoginCompletion). Weryfikacja potrafi wyskoczyc takze PO wyslaniu hasla, a jej
+ * rozwiazanie kasuje wpisane haslo.
+ *
+ * Dlatego - jak w kroku 1 (waitForStep1Outcome) - krecimy sie w petli: gdy widoczny jest
+ * modal Arkose, czekamy bez klikania; gdy widoczne jest PUSTE pole hasla (w dowolnej
+ * ramce), wpisujemy haslo i klikamy "Dalej" (nie czesciej niz co CLICK_COOLDOWN_MS, zeby
+ * nie przeszkadzac stronie w trakcie przejscia); gdy pole jest wypelnione, ale strona
+ * stoi - ponawiamy samo "Dalej". Pozostale ekrany (np. kod 2FA SMS/email) zostawiamy
+ * partnerowi i tylko czekamy. Bledy pojedynczej proby (np. przechwycone klikniecie) nie
+ * przerywaja logowania - kolejny obieg petli sprobuje ponownie.
+ */
+async function completePasswordStep(page, { isLoggedIn, clickContinueButton, password }, timeoutMs, log) {
+  const CLICK_COOLDOWN_MS = 8000;
+  const deadline = Date.now() + timeoutMs;
+  let lastSubmitAt = 0;
+  let submitCount = 0;
+  let captchaMessageShown = false;
+  let twoFactorMessageShown = false;
+
+  let lastDiagnosticAt = Date.now();
+
+  while (Date.now() < deadline) {
+    if (await isLoggedIn()) return true;
+
+    const passwordMatch = await findVisibleInAnyFrame(page, '#PASSWORD, input[type="password"]');
+    const arkoseBlocking = await isArkoseChallengeBlocking(page, passwordMatch);
+
+    // Slad w logu co ~20 s, gdy logowanie stoi - bez tego z logu klienta nie da sie
+    // odtworzyc, na co automat w danej chwili czekal.
+    if (Date.now() - lastDiagnosticAt >= 20000) {
+      log(`Logowanie (haslo) nadal trwa - weryfikacja "Ochrona konta" na ekranie: ${arkoseBlocking ? 'tak' : 'nie'}, pole hasla: ${passwordMatch ? 'widoczne' : 'brak'}, liczba prob wyslania hasla: ${submitCount}.`);
+      lastDiagnosticAt = Date.now();
+    }
+
+    if (arkoseBlocking) {
+      if (!captchaMessageShown) {
+        log(`${SAFE_TO_HELP_MARKER} Uber pokazuje weryfikacje "Ochrona konta" (puzzle Arkose) - rozwiaz ja recznie w oknie przegladarki ("Rozpocznij zadanie" -> dopasuj obrazki). Automat czeka i sam wpisze haslo, gdy Uber o nie poprosi.`);
+        captchaMessageShown = true;
+      }
+      // Po zniknieciu modalu dajemy stronie chwile na powrot do ekranu hasla, zanim
+      // cokolwiek wpiszemy.
+      lastSubmitAt = Math.max(lastSubmitAt, Date.now() - CLICK_COOLDOWN_MS + 1500);
+      await page.waitForTimeout(500);
+      continue;
+    }
+
+    if (passwordMatch && Date.now() - lastSubmitAt >= CLICK_COOLDOWN_MS) {
+      const { locator: passwordInput, frame: passwordFrame } = passwordMatch;
+      try {
+        const currentValue = await passwordInput.inputValue({ timeout: 2000 }).catch(() => '');
+        if (!currentValue) {
+          if (submitCount > 0) log('Uber ponownie prosi o haslo (np. po weryfikacji "Ochrona konta") - wpisuje je jeszcze raz...');
+          await typeIntoLoginField(page, passwordInput, password, 'Haslo', log);
+        } else if (submitCount > 0) {
+          log('Ekran hasla nie przeszedl dalej - ponawiam klikniecie "Dalej"...');
+        }
+        await dismissChatBubble(page);
+        await clickContinueButton(passwordInput, passwordFrame);
+      } catch (error) {
+        log(`Proba wyslania hasla nie powiodla sie (${error.message.split('\n')[0]}) - sprobuje ponownie.`);
+      }
+      lastSubmitAt = Date.now();
+      submitCount += 1;
+    } else if (!passwordMatch && submitCount > 0 && !twoFactorMessageShown && Date.now() - lastSubmitAt > 5000) {
+      log(`${SAFE_TO_HELP_MARKER} Mozliwe 2FA - jesli Uber prosi o kod, wpisz go recznie w otwartym oknie przegladarki. Automat czeka i sam wykryje zakonczenie logowania. (W pozostalych krokach nie klikaj w oknie przegladarki.)`);
+      twoFactorMessageShown = true;
+    }
+
+    await page.waitForTimeout(500);
+  }
+  return false;
 }
 
 /** "2026-08-10" -> "2026/08/10" (format pol "Start of report"/"End of report" w Uberze). */
@@ -474,9 +658,12 @@ async function findMatchingSettlementWindowOption(page, settlementPicker, from, 
  * generateUberReportWithRetry).
  */
 async function collapseSettlementPicker(page, settlementPicker) {
-  if ((await settlementPicker.getAttribute('aria-expanded').catch(() => null)) === 'true') {
+  if (
+    (await settlementPicker.isVisible().catch(() => false)) &&
+    (await settlementPicker.getAttribute('aria-expanded', { timeout: 2000 }).catch(() => null)) === 'true'
+  ) {
     await dismissChatBubble(page);
-    await humanClick(settlementPicker);
+    await humanClick(settlementPicker, { timeout: 5000 });
     await humanDelay(200, 500);
   }
 }
@@ -512,6 +699,20 @@ const isTimeFramePanelOpen = async (page) => {
   return false;
 };
 
+/** Czeka (do `timeout` ms), az wszystkie markery panelu znikna. true = panel zamkniety. */
+async function waitForTimeFramePanelClosed(page, timeout) {
+  const deadline = Date.now() + timeout;
+  do {
+    if (!(await isTimeFramePanelOpen(page))) {
+      // Krotka pauza na koniec animacji - element moze byc jeszcze w warstwie nad polami.
+      await page.waitForTimeout(300);
+      if (!(await isTimeFramePanelOpen(page))) return true;
+    }
+    await page.waitForTimeout(200);
+  } while (Date.now() < deadline);
+  return false;
+}
+
 /**
  * Zwija zewnetrzny panel "Przedzial czasowy raportu", jesli nadal jest otwarty - panel
  * zaslania pola ponizej (organizacje, przycisk "Wygeneruj"), wiec pozostawienie go
@@ -521,11 +722,29 @@ const isTimeFramePanelOpen = async (page) => {
  * "na wszelki wypadek") i sama naprawia sie, gdyby klikniecie zadzialalo odwrotnie.
  */
 async function collapseTimeFramePanel(page, timeFrameTrigger, log) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (!(await isTimeFramePanelOpen(page))) return true;
+  // Zgloszenie klienta (2026-09-14): po wybraniu gotowego okna rozliczenia pole organizacji
+  // "nie klikalo sie" w pierwszej probie, a w drugiej (gdzie panelu dat w ogole nie
+  // otwieramy, bo pole ma juz poprawny okres) dzialalo od razu. Panel zamyka sie z animacja,
+  // a w jej trakcie jego elementy sa nadal "widoczne" dla Playwrighta - klikniecie
+  // wyzwalacza (przelacznika!) w tym momencie potrafilo panel OTWORZYC z powrotem, a on
+  // przechwytywal potem klikniecie w organizacje. Dlatego: (1) najpierw dajemy panelowi
+  // czas zamknac sie samemu, (2) zamykamy go kliknieciem w naglowek dialogu - dla popovera
+  // to "klikniecie na zewnatrz", ktore tylko zamyka, nigdy nie otwiera - (3) dopiero na
+  // koncu, awaryjnie, klikamy przelacznik i zawsze czekamy na zakonczenie animacji.
+  if (await waitForTimeFramePanelClosed(page, 1500)) return true;
+
+  const heading = page.getByRole('heading', { name: /^wygeneruj raport$|^generate report$/i }).first();
+  if (await heading.isVisible().catch(() => false)) {
     await dismissChatBubble(page);
-    await humanClick(timeFrameTrigger);
-    await humanDelay(300, 600);
+    await heading.click({ timeout: 3000 }).catch(() => {});
+    if (await waitForTimeFramePanelClosed(page, 2000)) return true;
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (await waitForTimeFramePanelClosed(page, 1000)) return true;
+    await dismissChatBubble(page);
+    await humanClick(timeFrameTrigger, { timeout: 5000 }).catch(() => {});
+    if (await waitForTimeFramePanelClosed(page, 2000)) return true;
   }
   const stillOpen = await isTimeFramePanelOpen(page);
   if (stillOpen) {
@@ -581,11 +800,97 @@ async function clickEvenIfOverlaid(locator, label, log) {
     return;
   } catch (error) {
     log?.(`Klikniecie w "${label}" zostalo przechwycone przez nakladke - klikam element bezposrednio w DOM.`);
-    await locator.evaluate((el) => {
-      el.focus?.();
-      el.click();
-    });
+    await locator.evaluate(
+      (el) => {
+        el.focus?.();
+        el.click();
+      },
+      undefined,
+      { timeout: 5000 }
+    );
   }
+}
+
+/**
+ * Otwiera liste organizacji w dialogu "Wygeneruj raport". Zgloszenie klienta (2026-09-14,
+ * po wybraniu GOTOWEGO okna rozliczenia): pole jest widoczne, ale automat nie potrafi go
+ * kliknac - log pokazal nieudane zwykle klikniecie, a potem 30 s wiszace "klikniecie w DOM"
+ * (locator.evaluate bez limitu czasu). Nie wiemy na pewno, co przechwytuje klikniecie, wiec
+ * zamiast jednej techniki probujemy kolejno kilku, kazdej z KROTKIM limitem czasu, i po
+ * kazdej sprawdzamy STAN (czy checkboxy organizacji sa widoczne), a nie to, czy samo
+ * klikniecie "przeszlo". Do logu zapisujemy element, ktory lezy nad polem - zeby przy
+ * kolejnym problemie wiedziec, co je zaslania.
+ */
+async function openOrganizationList(page, orgInput, log) {
+  const labels = page.locator('label[data-baseweb="checkbox"]');
+  const isOpen = async (timeout = 1500) => {
+    try {
+      await labels.first().waitFor({ state: 'visible', timeout });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  await orgInput.waitFor({ state: 'attached', timeout: 10000 });
+  if (await isOpen(200)) return;
+
+  const describeElementOnTop = () =>
+    orgInput
+      .evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        if (!top) return 'brak elementu w tym punkcie';
+        if (top === el || el.contains(top) || top.contains(el)) return null;
+        const attrs = ['data-testid', 'data-baseweb', 'role', 'aria-label']
+          .map((name) => (top.getAttribute(name) ? `${name}="${top.getAttribute(name)}"` : ''))
+          .filter(Boolean)
+          .join(' ');
+        return `<${top.tagName.toLowerCase()} ${attrs}> "${(top.textContent || '').trim().slice(0, 60)}"`;
+      }, undefined, { timeout: 3000 })
+      .catch((error) => `nie udalo sie sprawdzic (${error.message.split('\n')[0]})`);
+
+  const wrapper = orgInput.locator('xpath=ancestor::*[@data-baseweb="input" or @data-baseweb="select"][1]');
+  const strategies = [
+    ['zwykle klikniecie', () => humanClick(orgInput, { timeout: 3000 })],
+    ['klikniecie w obudowe pola (force)', () => wrapper.first().click({ force: true, timeout: 3000 })],
+    [
+      'zdarzenia myszy w DOM',
+      () =>
+        orgInput.evaluate(
+          (el) => {
+            el.scrollIntoView({ block: 'center' });
+            el.focus?.();
+            for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+              const EventType = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+              el.dispatchEvent(new EventType(type, { bubbles: true, cancelable: true, view: window }));
+            }
+          },
+          undefined,
+          { timeout: 3000 }
+        ),
+    ],
+    [
+      'klawiatura',
+      async () => {
+        await orgInput.focus({ timeout: 3000 });
+        for (const key of ['Enter', 'ArrowDown', 'Space']) {
+          await page.keyboard.press(key);
+          if (await isOpen(700)) return;
+        }
+      },
+    ],
+  ];
+
+  for (const [name, run] of strategies) {
+    await dismissChatBubble(page);
+    const onTop = await describeElementOnTop();
+    if (onTop) log?.(`Pole "Wybierz organizacje" jest zasloniete przez: ${onTop}`);
+    await run().catch((error) => log?.(`Otwieranie listy organizacji (${name}) nie powiodlo sie: ${error.message.split('\n')[0]}`));
+    if (await isOpen()) return;
+    log?.(`Lista organizacji nie otworzyla sie po: ${name} - probuje inaczej.`);
+  }
+  throw new Error('Nie udalo sie otworzyc listy organizacji (pole "Wybierz organizacje") zadnym sposobem.');
 }
 
 /**
@@ -639,6 +944,74 @@ async function dismissChatBubble(page) {
       await humanDelay(200, 400);
       break;
     }
+  }
+}
+
+/** Godzina ustawiana w obu polach czasu zakresu niestandardowego (poczatek doby rozliczeniowej Ubera). */
+const UBER_CUSTOM_RANGE_TIME = '4:00 AM';
+
+/** "4:00 AM" / "04:00 AM" / "4:00AM" / "04:00" -> "4:00 AM" - do porownan niezaleznych od formatu. */
+function normalizeUberTime(text) {
+  const match = String(text || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const suffix = match[3]?.toUpperCase();
+  if (!suffix) {
+    // Format 24-godzinny - przeliczamy na 12-godzinny, zeby porownywac jednolicie.
+    const pm = hours >= 12;
+    hours = hours % 12 || 12;
+    return `${hours}:${match[2]} ${pm ? 'PM' : 'AM'}`;
+  }
+  return `${hours}:${match[2]} ${suffix}`;
+}
+
+/**
+ * Ustawia godzine w polu czasu zakresu niestandardowego (Base Web TimePicker: input
+ * role="combobox" z aria-label "Selected 4:00 AM. Select a time, 12-hour format.", obok
+ * div z atrybutem value="4:00 AM"). Klient (2026-09-14): przy "Zakres niestandardowy" obie
+ * godziny - rozpoczecia i zakonczenia - musza byc 4:00 AM. Najpierw sprawdzamy biezaca
+ * wartosc (czesto juz jest poprawna - wtedy nic nie klikamy), potem wybieramy opcje z listy,
+ * a gdyby jej nie bylo widac - wpisujemy godzine i zatwierdzamy Enterem. Na koncu weryfikacja.
+ */
+async function selectUberTime(page, combobox, time, label, log) {
+  const expected = normalizeUberTime(time);
+  const readCurrent = async () => {
+    const ariaLabel = await combobox.getAttribute('aria-label').catch(() => '');
+    const fromAria = ariaLabel?.match(/(\d{1,2}:\d{2}\s*(?:AM|PM)?)/i)?.[1];
+    if (fromAria) return normalizeUberTime(fromAria);
+    const shown = await combobox
+      .locator('xpath=ancestor::*[.//*[@value]][1]//*[@value]')
+      .first()
+      .getAttribute('value')
+      .catch(() => null);
+    return normalizeUberTime(shown);
+  };
+
+  if ((await readCurrent()) === expected) return;
+
+  await dismissChatBubble(page);
+  await humanClick(combobox);
+  await humanDelay(300, 600);
+  const [hours, rest] = expected.split(':');
+  const option = page
+    .getByRole('option')
+    .filter({ hasText: new RegExp(`^\\s*0?${hours}:${rest.replace(' ', '\\s*')}\\s*$|^\\s*0?${hours}:${rest.slice(0, 2)}\\s*$`, 'i') })
+    .first();
+  if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await humanClick(option);
+  } else {
+    log?.(`Nie widze opcji "${time}" na liscie pola "${label}" - wpisuje godzine recznie.`);
+    await combobox.fill(time).catch(async () => {
+      await combobox.pressSequentially(time, { delay: 50 });
+    });
+    await humanDelay(300, 600);
+    await combobox.press('Enter');
+  }
+  await humanDelay(300, 600);
+
+  const actual = await readCurrent();
+  if (actual !== expected) {
+    throw new Error(`Pole godziny "${label}" pokazuje "${actual}" zamiast oczekiwanego "${time}" - wybor godziny w Uberze najwyrazniej sie nie powiodl.`);
   }
 }
 
@@ -759,7 +1132,9 @@ async function attemptGenerateUberReport(page, from, to, account, log) {
         throw new Error(`Po wybraniu gotowego okna rozliczenia pole "Przedzial czasowy raportu" pokazuje "${outerValue}" (picker w zakladce: "${pickerValue}") zamiast oczekiwanego okresu ${from} - ${to}.`);
       }
       // Panel z zakladkami zostaje otwarty i zaslania pola ponizej (organizacje, przycisk
-      // "Wygeneruj") - musimy go zwinac, inaczej przechwyci kolejne kliknieca.
+      // "Wygeneruj") - musimy go zwinac, inaczej przechwyci kolejne kliknieca. Najpierw
+      // zagniezdzona liste okien (gdyby po wyborze nie zwinela sie sama), potem panel.
+      await collapseSettlementPicker(page, settlementPicker);
       await collapseTimeFramePanel(page, timeFrameTrigger, log);
     } else {
       // Na liscie okien rozliczeniowych nie bylo szukanego okresu - zwijamy zagniezdzony
@@ -815,6 +1190,12 @@ async function attemptGenerateUberReport(page, from, to, account, log) {
           throw new Error(`Po kliknieciu w kalendarz pole daty "${label}" pokazuje "${actual}" zamiast oczekiwanego "${expected}" - wybor daty w Uberze najwyrazniej sie nie powiodl.`);
         }
       }
+
+      // Godziny obu krancow zakresu: 4:00 AM (Base Web TimePicker, role="combobox").
+      const timeInputs = page.locator('input[role="combobox"][aria-label*="Select a time" i]');
+      await timeInputs.nth(1).waitFor({ state: 'visible' });
+      await selectUberTime(page, timeInputs.nth(0), UBER_CUSTOM_RANGE_TIME, 'Godzina rozpoczecia', log);
+      await selectUberTime(page, timeInputs.nth(1), UBER_CUSTOM_RANGE_TIME, 'Godzina zakonczenia', log);
       // Wypelnienie pol otwiera kalendarz z potwierdzeniem wybranego zakresu (zweryfikowane
       // na zywo: "Selected start date"/"Selected end date" w aria-label komorek - daty SA
       // poprawnie ustawione, kalendarz to tylko widok do zamkniecia). Podobnie jak w
@@ -855,15 +1236,15 @@ async function attemptGenerateUberReport(page, from, to, account, log) {
   // JESZCZE PRZED kliknieciem - z zewnatrz wyglada to dokladnie jak "automat nie klika w
   // pole organizacji".
   const orgInput = page
-    .getByPlaceholder(/select organizations to include in report|wybierz organizacje/i)
+    // \s zamiast spacji: Uber wstawia w polskich tekstach twarde spacje (&nbsp;).
+    .getByPlaceholder(/select\s+organizations|wybierz\s+organizacj/i)
     .first();
   // Zabezpieczenie: gdyby panel "Przedzial czasowy raportu" mimo wszystko byl nadal
   // otwarty, jest nakladka zaslaniajaca to wlasnie pole i przechwytuje ponizsze
   // klikniecie (zgloszenie klienta 2026-09-07: "nie wybiera organizacji"). Wywolanie jest
   // idempotentne - przy zamknietym panelu nie robi nic.
   await collapseTimeFramePanel(page, timeFrameTrigger, log);
-  await dismissChatBubble(page);
-  await clickEvenIfOverlaid(orgInput, 'Wybierz organizacje', log);
+  await openOrganizationList(page, orgInput, log);
   await humanDelay(300, 700);
   // `label[data-baseweb="checkbox"]` bez zawezenia szuka na CALEJ stronie, nie tylko w tym
   // konkretnym popoverze - Base Web (ten sam system komponentow) jest uzywany w wielu
