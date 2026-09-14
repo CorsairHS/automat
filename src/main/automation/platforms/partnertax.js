@@ -1,4 +1,6 @@
 const { waitForAuthStateToSettle, waitForLoginCompletion } = require('../loginHelpers');
+const { matchOptionValue, findAllOptionValues } = require('../optionMatching');
+const { normalizeBaseUrl, buildAdminUrls } = require('../../partnerTaxConfig');
 
 // Krotka pauza miedzy kolejnymi krokami formularza - bez niej automat klika/wypelnia
 // pola szybciej niz strona nadaza (animacje formsetu, re-render po selectOption), a
@@ -10,88 +12,57 @@ async function pause(page, ms = STEP_DELAY_MS) {
   await page.waitForTimeout(ms);
 }
 
-const BASE_URL = 'https://app.nova-partner.pl';
-const LOGIN_URL = `${BASE_URL}/admin/`;
-const RECKONING_LIST_URL = `${BASE_URL}/admin/finances/reckoning/`;
-
-// Wartosci <option value="..."> pola "System" w formularzu Data source (zweryfikowane
-// na zrzucie ekranu DOM od klienta, 2026-08-19). Lista ma tez warianty
-// archiwalne/duplikaty (np. "BOLT"=65 obok "Bolt"=17, "iTaxi correction file" itp.) -
-// uzywamy podstawowych wpisow wskazanych przez klienta jako wlasciwe dla biezacego
-// przeplywu (Bolt/Uber/FreeNow).
-const SYSTEM_OPTION_VALUES = {
-  bolt: '17',
-  uber: '32',
-  freenow: '2',
-  boltfood: '78',
+// Teksty opcji pola "System" w formularzu Data source, po ktorych szukamy wlasciwego
+// wpisu w panelu danego partnera (ID opcji to klucze bazy danych konkretnej instalacji -
+// u kazdego partnera inne, dlatego nie trzymamy ich w kodzie). Pierwszy kandydat jest
+// preferowany przy duplikatach - w panelu Nova sa np. "Bolt"=17 i archiwalne "BOLT"=65,
+// a wlasciwym dla uploadu jest "Bolt". Przy usuwaniu akceptujemy wszystkie wpisy pasujace
+// po normalizacji (raporty wgrane recznie bywaja pod archiwalnym wariantem - znalezione
+// na zywo 2026-08-21).
+const SYSTEM_LABEL_CANDIDATES = {
+  bolt: ['Bolt'],
+  uber: ['Uber'],
+  freenow: ['Freenow'],
+  boltfood: ['Bolt Food'],
 };
 
-// Przy usuwaniu trzeba dopasowac tez warianty/duplikaty tego samego systemu (patrz
-// komentarz wyzej) - np. istniejacy raport moze byc zapisany pod "BOLT"=65 zamiast
-// "Bolt"=17, jesli zostal wgrany recznie przez klienta, nie przez ten automat (ktory
-// zawsze uzywa kanonicznej wartosci z SYSTEM_OPTION_VALUES przy uploadzie). Znalezione
-// na zywo 2026-08-21: rozliczenie z raportem Bolt zapisanym jako System=65.
-const SYSTEM_OPTION_ALIASES = {
-  bolt: ['17', '65'],
-  uber: ['32'],
-  freenow: ['2'],
-  boltfood: ['78'],
-};
-
-// Wartosci <option value="..."> pola "City" (zweryfikowane na zrzucie ekranu DOM,
-// 2026-08-19). Dopasowanie po nazwie miasta z konfiguracji konta (case-insensitive,
-// diakrytyki obojetne). Lista nie jest kompletna dla wszystkich mozliwych miast -
-// rozszerzac w miare potrzeb, gdy pojawi sie nowe konto z nieobslugiwanym miastem.
-const CITY_OPTION_VALUES = {
-  'wroclaw': '7',
-  'warszawa': '8',
-  'legnica': '9',
-  'krakow': '10',
-  'walbrzych/jelenia gora': '11',
-  'bialystok': '12',
-  'augustow/suwalki': '13',
-  'lubin': '14',
-  'sulawki/augustow uber': '15',
-  'sulawki bolt': '16',
-  'poznan': '17',
-  'leszno': '18',
-};
-
-// Wartosci <option value="..."> pola "Company" (zweryfikowane na zrzucie ekranu DOM,
-// 2026-08-19). Lista zawiera tylko firmy klienta demo - kolejne firmy innych partnerow
-// trzeba tu dopisywac w miare potrzeb (dopasowanie po nazwie z konfiguracji konta).
-const COMPANY_OPTION_VALUES = {
-  'unity drive': '5',
-  'da investment': '4',
-};
-
-function normalizeTextKey(text) {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[ąćęłńóśźż]/g, (ch) => ({ ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n', ó: 'o', ś: 's', ź: 'z', ż: 'z' }[ch] || ch));
+/**
+ * Opcje <select> odczytane z ukrytego wiersza-szablonu formsetu Django (patrz
+ * realSourceFieldSelector) - jest zawsze w DOM i ma pelna liste opcji, wiec mozna
+ * rozwiazac ID przed dodaniem wiersza i tak samo przy usuwaniu.
+ */
+async function readTemplateOptions(page, fieldSuffix) {
+  const select = page.locator(`select[name="sources-__prefix__-${fieldSuffix}"]`);
+  if ((await select.count()) === 0) {
+    throw new Error(`Nie znaleziono pola "${fieldSuffix}" (sources-__prefix__-${fieldSuffix}) w formularzu rozliczenia PartnerTax admin.`);
+  }
+  return select.first().evaluate((el) =>
+    Array.from(el.options).map((option) => ({ value: option.value, text: option.textContent }))
+  );
 }
 
-function resolveCityValue(cityName) {
-  if (!cityName) {
+async function resolveSourceValues(page, { platformId, city, company }) {
+  const systemCandidates = SYSTEM_LABEL_CANDIDATES[platformId];
+  if (!systemCandidates) {
+    throw new Error(`Brak mapowania System dla platformy "${platformId}" w PartnerTax admin.`);
+  }
+  if (!city) {
     throw new Error('Brak miasta w konfiguracji konta - wymagane do wgrania pliku w PartnerTax admin.');
   }
-  const value = CITY_OPTION_VALUES[normalizeTextKey(cityName)];
-  if (!value) {
-    throw new Error(`Nieznane miasto dla PartnerTax admin: "${cityName}". Dopisz je do CITY_OPTION_VALUES w partnertax.js.`);
-  }
-  return value;
-}
-
-function resolveCompanyValue(companyName) {
-  if (!companyName) {
+  if (!company) {
     throw new Error('Brak firmy w konfiguracji konta - wymagane do wgrania pliku w PartnerTax admin.');
   }
-  const value = COMPANY_OPTION_VALUES[normalizeTextKey(companyName)];
-  if (!value) {
-    throw new Error(`Nieznana firma dla PartnerTax admin: "${companyName}". Dopisz ja do COMPANY_OPTION_VALUES w partnertax.js.`);
-  }
-  return value;
+  return {
+    systemValue: matchOptionValue(await readTemplateOptions(page, 'system'), systemCandidates, { fieldName: 'System' }),
+    cityValue: matchOptionValue(await readTemplateOptions(page, 'city'), [city], { fieldName: 'City' }),
+    // Firmy w panelu maja forme prawna w nazwie ("UNITY DRIVE SP Z O O"), konta zwykle
+    // nie ("Unity Drive") - jednoznaczne "zawiera" tylko dla tego pola.
+    companyValue: matchOptionValue(await readTemplateOptions(page, 'company'), [company], { fieldName: 'Company', allowContains: true }),
+  };
+}
+
+function resolveAdminUrls(account) {
+  return buildAdminUrls(normalizeBaseUrl(account.fields.baseUrl));
 }
 
 /**
@@ -99,13 +70,13 @@ function resolveCompanyValue(companyName) {
  * trzymana w trwalym kontekscie przegladarki (jak inne platformy), wiec kolejne
  * uruchomienia zwykle pomijaja ten krok.
  */
-async function loginToPartnerTaxAdmin(page, account, statusCallback) {
+async function loginToPartnerTaxAdmin(page, account, adminUrls, statusCallback) {
   const log = (msg) => statusCallback?.(msg);
   const isLoggedIn = () => !/\/admin\/login\//.test(page.url());
   const isLoginFormVisible = () => page.locator('#id_username').isVisible().catch(() => false);
 
   log('Otwieram PartnerTax admin...');
-  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(adminUrls.loginUrl, { waitUntil: 'domcontentloaded' });
   await waitForAuthStateToSettle(page, { isLoggedIn, isLoginFormVisible });
 
   if (!isLoggedIn()) {
@@ -150,12 +121,12 @@ async function withPageLoadRetry(page, action, { attempts = 5, statusCallback } 
  * Otwiera liste rozliczen i wchodzi w pierwsze z kolumna Finished = False (to ono
  * przyjmuje nowe raporty - zweryfikowane na zrzucie ekranu listy od klienta, 2026-08-19).
  */
-async function openUnfinishedReckoning(page, statusCallback) {
+async function openUnfinishedReckoning(page, adminUrls, statusCallback) {
   const log = (msg) => statusCallback?.(msg);
   log('Szukam niezakonczonego rozliczenia (Finished = False)...');
   await withPageLoadRetry(
     page,
-    () => page.goto(RECKONING_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }),
+    () => page.goto(adminUrls.reckoningListUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }),
     { statusCallback },
   );
 
@@ -258,12 +229,9 @@ async function addDataSourceRow(page) {
  */
 async function addDataSourceFile(page, { platformId, city, company, filePath }, statusCallback) {
   const log = (msg) => statusCallback?.(msg);
-  const systemValue = SYSTEM_OPTION_VALUES[platformId];
-  if (!systemValue) {
-    throw new Error(`Brak mapowania System dla platformy "${platformId}" w PartnerTax admin.`);
-  }
-  const cityValue = resolveCityValue(city);
-  const companyValue = resolveCompanyValue(company);
+  // Rozwiazujemy wszystkie trzy ID przed dodaniem wiersza - przy bledzie konfiguracji
+  // (nieznane miasto, niejednoznaczny system) formularz zostaje nietkniety.
+  const { systemValue, cityValue, companyValue } = await resolveSourceValues(page, { platformId, city, company });
 
   log(`Dodaje Data source: system=${platformId}, miasto=${city}, firma=${company}, plik=${filePath}...`);
   await addDataSourceRow(page);
@@ -302,10 +270,11 @@ async function addDataSourceFile(page, { platformId, city, company, filePath }, 
  */
 async function uploadToPartnerTax({ context, account, uploads, statusCallback }) {
   const log = (msg) => statusCallback?.(msg);
+  const adminUrls = resolveAdminUrls(account);
   const page = await context.newPage();
 
-  await loginToPartnerTaxAdmin(page, account, statusCallback);
-  await openUnfinishedReckoning(page, statusCallback);
+  await loginToPartnerTaxAdmin(page, account, adminUrls, statusCallback);
+  await openUnfinishedReckoning(page, adminUrls, statusCallback);
 
   // Jesli ktorys plik zawiedzie w polowie (np. platforma z bledem walidacji), pliki
   // dodane wczesniej w tej samej petli sa juz trwale zapisane po stronie serwera -
@@ -332,8 +301,8 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback })
 
 /**
  * Usuwa jeden wiersz Data source dla danej platformy (Bolt/Uber/FreeNow, wg
- * SYSTEM_OPTION_VALUES) z aktualnie otwartego rozliczenia: zaznacza jego checkbox DELETE
- * (`sources-N-DELETE`) i zapisuje formularz ("Save and continue editing" - jak przy
+ * SYSTEM_LABEL_CANDIDATES) z aktualnie otwartego rozliczenia: zaznacza jego checkbox
+ * DELETE (`sources-N-DELETE`) i zapisuje formularz ("Save and continue editing" - jak przy
  * dodawaniu pliku, ten sam wymog PartnerTax admin). Usuwa TYLKO pierwszy pasujacy wiersz
  * na wywolanie - klient wskazal wprost, ze kasuje sie po jednym rekordzie na raz i sciezke
  * (otworz rozliczenie -> znajdz system -> zaznacz DELETE -> zapisz) powtarza sie osobno
@@ -341,13 +310,14 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback })
  * usuniecia (nic sie wtedy nie zmienia w formularzu).
  */
 /**
- * Zwraca wartosc System (ID z SYSTEM_OPTION_VALUES) dla kazdego wiersza Data source w
- * kolejnosci wystapienia w formularzu. Juz zapisane wiersze pokazuja pole System jako
- * readonly link do "/admin/systems/system/<id>/change/" (nie <select> - selecty sa tylko
- * na nowo dodanym, jeszcze niezapisanym wierszu, patrz addDataSourceRow) - ID w hrefie
- * odpowiada dokladnie wartosciom w SYSTEM_OPTION_VALUES. Dla ewentualnego swiezo dodanego,
- * niezapisanego jeszcze wiersza (select, nie link) wartosc dolaczana jest tak samo, zeby
- * kolejnosc/indeksy pokrywaly sie z kolejnoscia checkboxow DELETE w formularzu.
+ * Zwraca wartosc System (ID opcji odczytanej z panelu, patrz readTemplateOptions) dla
+ * kazdego wiersza Data source w kolejnosci wystapienia w formularzu. Juz zapisane wiersze
+ * pokazuja pole System jako readonly link do "/admin/systems/system/<id>/change/" (nie
+ * <select> - selecty sa tylko na nowo dodanym, jeszcze niezapisanym wierszu, patrz
+ * addDataSourceRow) - ID w hrefie odpowiada dokladnie wartosciom opcji z panelu. Dla
+ * ewentualnego swiezo dodanego, niezapisanego jeszcze wiersza (select, nie link) wartosc
+ * dolaczana jest tak samo, zeby kolejnosc/indeksy pokrywaly sie z kolejnoscia checkboxow
+ * DELETE w formularzu.
  */
 async function getSystemRowValues(page) {
   const rowValues = [];
@@ -369,14 +339,15 @@ async function getSystemRowValues(page) {
   return rowValues;
 }
 
-async function deleteDataSourceForSystem(page, platformId, statusCallback) {
+async function deleteDataSourceForSystem(page, platformId, adminUrls, statusCallback) {
   const log = (msg) => statusCallback?.(msg);
-  const acceptableValues = SYSTEM_OPTION_ALIASES[platformId];
-  if (!acceptableValues) {
+  const systemCandidates = SYSTEM_LABEL_CANDIDATES[platformId];
+  if (!systemCandidates) {
     throw new Error(`Brak mapowania System dla platformy "${platformId}" w PartnerTax admin.`);
   }
 
-  const reckoningLabel = await openUnfinishedReckoning(page, statusCallback);
+  const reckoningLabel = await openUnfinishedReckoning(page, adminUrls, statusCallback);
+  const acceptableValues = findAllOptionValues(await readTemplateOptions(page, 'system'), systemCandidates);
 
   const rowValues = await getSystemRowValues(page);
   const rowCount = rowValues.length;
@@ -431,14 +402,15 @@ async function deleteDataSourceForSystem(page, platformId, statusCallback) {
  */
 async function deleteReportsFromPartnerTax({ context, account, statusCallback }) {
   const log = (msg) => statusCallback?.(msg);
+  const adminUrls = resolveAdminUrls(account);
   const page = await context.newPage();
 
-  await loginToPartnerTaxAdmin(page, account, statusCallback);
+  await loginToPartnerTaxAdmin(page, account, adminUrls, statusCallback);
 
   let deletedCount = 0;
   const diagnostics = [];
-  for (const platformId of Object.keys(SYSTEM_OPTION_VALUES)) {
-    const result = await deleteDataSourceForSystem(page, platformId, statusCallback);
+  for (const platformId of Object.keys(SYSTEM_LABEL_CANDIDATES)) {
+    const result = await deleteDataSourceForSystem(page, platformId, adminUrls, statusCallback);
     if (result.deleted) {
       deletedCount += 1;
     } else {
@@ -454,7 +426,5 @@ async function deleteReportsFromPartnerTax({ context, account, statusCallback })
 module.exports = {
   uploadToPartnerTax,
   deleteReportsFromPartnerTax,
-  SYSTEM_OPTION_VALUES,
-  CITY_OPTION_VALUES,
-  COMPANY_OPTION_VALUES,
+  SYSTEM_LABEL_CANDIDATES,
 };

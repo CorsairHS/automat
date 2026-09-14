@@ -4,7 +4,7 @@ function lit(value) {
   return JSON.stringify(value);
 }
 
-const BASE_URL = 'https://app.nova-partner.pl';
+const DEFAULT_BASE_URL = 'https://app.nova-partner.pl';
 
 /**
  * Django admin renderuje caly panel jako standardowe formularze server-rendered
@@ -58,26 +58,31 @@ function buildReckoningListHtml({ changeFormUrl }) {
 </html>`;
 }
 
-const KNOWN_SYSTEMS = [
+const DEFAULT_SYSTEMS = [
+  ['65', 'BOLT'],
+  ['83', 'BOLT - korekta'],
   ['17', 'Bolt'],
-  ['32', 'Uber'],
-  ['2', 'FreeNow'],
+  ['54', 'Bolt - ilość przejazdów'],
   ['78', 'Bolt Food'],
+  ['2', 'Freenow'],
+  ['44', 'Freenow - ilość przejazdów'],
+  ['32', 'Uber'],
+  ['79', 'Uber korekta'],
 ];
-const KNOWN_CITIES = [
-  ['7', 'Wroclaw'],
+const DEFAULT_CITIES = [
+  ['7', 'Wrocław'],
   ['8', 'Warszawa'],
 ];
-const KNOWN_COMPANIES = [
-  ['5', 'Unity Drive'],
-  ['4', 'Da Investment'],
+const DEFAULT_COMPANIES = [
+  ['5', 'UNITY DRIVE SP Z O O'],
+  ['4', 'DA INVESTMENT SP Z O O'],
 ];
 
 function optionsHtml(pairs) {
   return `<option value=""></option>` + pairs.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
 }
 
-function buildChangeFormHtml(state, { changeFormUrl }) {
+function buildChangeFormHtml(state, { changeFormUrl, systems, cities, companies }) {
   const savedRowsHtml = state.savedSources
     .map(
       (row, i) => `<div class="source-row">
@@ -96,9 +101,9 @@ function buildChangeFormHtml(state, { changeFormUrl }) {
     <!-- Formset "empty form" template - zawsze w DOM, zawsze niewidoczny, indeks
          literalny "__prefix__" - selektory produkcyjne musza go wykluczac. -->
     <tr style="display:none">
-      <select name="sources-__prefix__-system">${optionsHtml(KNOWN_SYSTEMS)}</select>
-      <select name="sources-__prefix__-city">${optionsHtml(KNOWN_CITIES)}</select>
-      <select name="sources-__prefix__-company">${optionsHtml(KNOWN_COMPANIES)}</select>
+      <select name="sources-__prefix__-system">${optionsHtml(systems)}</select>
+      <select name="sources-__prefix__-city">${optionsHtml(cities)}</select>
+      <select name="sources-__prefix__-company">${optionsHtml(companies)}</select>
       <input type="file" name="sources-__prefix__-file" />
       <input type="checkbox" name="sources-__prefix__-DELETE" />
     </tr>
@@ -120,9 +125,9 @@ function buildChangeFormHtml(state, { changeFormUrl }) {
 
       const row = document.createElement('div');
       row.innerHTML = \`
-        <select name="sources-\${rowIndex}-system">${optionsHtml(KNOWN_SYSTEMS)}</select>
-        <select name="sources-\${rowIndex}-city">${optionsHtml(KNOWN_CITIES)}</select>
-        <select name="sources-\${rowIndex}-company">${optionsHtml(KNOWN_COMPANIES)}</select>
+        <select name="sources-\${rowIndex}-system">${optionsHtml(systems)}</select>
+        <select name="sources-\${rowIndex}-city">${optionsHtml(cities)}</select>
+        <select name="sources-\${rowIndex}-company">${optionsHtml(companies)}</select>
         <input type="file" name="sources-\${rowIndex}-file" />
       \`;
       document.getElementById('pending-sources').appendChild(row);
@@ -153,15 +158,20 @@ function buildChangeFormHtml(state, { changeFormUrl }) {
 }
 
 /**
- * Instaluje przechwytywanie ruchu do app.nova-partner.pl. Login jak w
- * Bolcie/FreeNow (wielostronicowa nawigacja, klienckie przekierowanie zamiast
- * HTTP 302 - patrz historia poprzednich mockow w tym repo, dlaczego). Formularz
- * "Data source" to prawdziwy <form method="post"> (patrz komentarz nad
- * buildChangeFormHtml) - kazda zmiana pola wysyla stan na biezaco, a POST przy
- * "Zapisz" tylko zatwierdza juz znane dane (bez parsowania multipart/form-data).
+ * Instaluje przechwytywanie ruchu do adresu panelu ze scenariusza (domyslnie
+ * app.nova-partner.pl). Login jak w Bolcie/FreeNow (wielostronicowa nawigacja,
+ * klienckie przekierowanie zamiast HTTP 302 - patrz historia poprzednich mockow
+ * w tym repo, dlaczego). Formularz "Data source" to prawdziwy <form method="post">
+ * (patrz komentarz nad buildChangeFormHtml) - kazda zmiana pola wysyla stan na
+ * biezaco, a POST przy "Zapisz" tylko zatwierdza juz znane dane (bez parsowania
+ * multipart/form-data).
  */
 async function installPartnerTaxMock(context, scenario = {}) {
   const {
+    baseUrl = DEFAULT_BASE_URL,
+    systems = DEFAULT_SYSTEMS,
+    cities = DEFAULT_CITIES,
+    companies = DEFAULT_COMPANIES,
     credentials = DEFAULT_CREDENTIALS,
     preSeedSavedSources = [],
     hangOnFirstSave = false,
@@ -199,7 +209,7 @@ async function installPartnerTaxMock(context, scenario = {}) {
 
   await context.route('**/*', (route) => route.abort('blockedbyclient'));
 
-  await context.route(`${BASE_URL}/**`, async (route) => {
+  await context.route(`${baseUrl}/**`, async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
 
@@ -212,21 +222,21 @@ async function installPartnerTaxMock(context, scenario = {}) {
       if (!state.loggedIn) {
         return route.fulfill({
           status: 200,
-          contentType: 'text/html',
-          body: `<script>window.location.replace(${lit(BASE_URL + loginPath)})</script>`,
+          contentType: 'text/html; charset=utf-8',
+          body: `<script>window.location.replace(${lit(baseUrl + loginPath)})</script>`,
         });
       }
-      return route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>Admin index</body></html>' });
+      return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: '<html><body>Admin index</body></html>' });
     }
 
     if (url.pathname === loginPath) {
       return route.fulfill({
         status: 200,
-        contentType: 'text/html',
+        contentType: 'text/html; charset=utf-8',
         body: buildLoginHtml({
           expectedUsername: credentials.username,
           expectedPassword: credentials.password,
-          redirectTo: BASE_URL + adminIndexPath,
+          redirectTo: baseUrl + adminIndexPath,
         }),
       });
     }
@@ -234,8 +244,8 @@ async function installPartnerTaxMock(context, scenario = {}) {
     if (url.pathname === reckoningListPath) {
       return route.fulfill({
         status: 200,
-        contentType: 'text/html',
-        body: buildReckoningListHtml({ changeFormUrl: BASE_URL + changeFormPath }),
+        contentType: 'text/html; charset=utf-8',
+        body: buildReckoningListHtml({ changeFormUrl: baseUrl + changeFormPath }),
       });
     }
 
@@ -273,8 +283,8 @@ async function installPartnerTaxMock(context, scenario = {}) {
 
       return route.fulfill({
         status: 200,
-        contentType: 'text/html',
-        body: buildChangeFormHtml(state, { changeFormUrl: BASE_URL + changeFormPath }),
+        contentType: 'text/html; charset=utf-8',
+        body: buildChangeFormHtml(state, { changeFormUrl: baseUrl + changeFormPath, systems, cities, companies }),
       });
     }
 
