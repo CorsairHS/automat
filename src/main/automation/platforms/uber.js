@@ -1193,7 +1193,7 @@ async function attemptGenerateUberReport(page, from, to, account, log) {
 
       // Godziny obu krancow zakresu: 4:00 AM (Base Web TimePicker, role="combobox").
       const timeInputs = page.locator('input[role="combobox"][aria-label*="Select a time" i]');
-      await timeInputs.nth(1).waitFor({ state: 'visible' });
+      await timeInputs.nth(1).waitFor({ state: 'visible', timeout: 10000 });
       await selectUberTime(page, timeInputs.nth(0), UBER_CUSTOM_RANGE_TIME, 'Godzina rozpoczecia', log);
       await selectUberTime(page, timeInputs.nth(1), UBER_CUSTOM_RANGE_TIME, 'Godzina zakonczenia', log);
       // Wypelnienie pol otwiera kalendarz z potwierdzeniem wybranego zakresu (zweryfikowane

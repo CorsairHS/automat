@@ -150,6 +150,16 @@ function buildAppHtml(state, options) {
         <div id="custom-range-fields" style="display:none">
           <input aria-label="Select a date range." id="date-input-0" readonly value="${fromSlash}" />
           <input aria-label="Select a date range." id="date-input-1" readonly value="" />
+          ${[0, 1]
+            .map(
+              (i) => `<div class="time-picker">
+            <input role="combobox" id="time-input-${i}" aria-label="Selected 12:00 AM. Select a time, 12-hour format." readonly />
+            <ul role="listbox" id="time-listbox-${i}" style="display:none">
+              ${['12:00 AM', '4:00 AM', '8:00 AM'].map((t) => `<li role="option">${t}</li>`).join('')}
+            </ul>
+          </div>`
+            )
+            .join('\n')}
           <div id="calendar" style="display:none">
             ${Array.from({ length: 31 }, (_, i) => i + 1)
               .map((d) => `<div role="gridcell">${d}</div>`)
@@ -331,6 +341,20 @@ function buildAppHtml(state, options) {
             ? "document.getElementById('time-frame-panel').style.display = 'none';"
             : ''}
           fetch('/api/mock/settlement-window-selected', { method: 'POST', body: opt.textContent });
+        });
+      });
+
+      [0, 1].forEach(function (i) {
+        var input = document.getElementById('time-input-' + i);
+        var list = document.getElementById('time-listbox-' + i);
+        input.addEventListener('click', function () {
+          list.style.display = '';
+        });
+        Array.prototype.forEach.call(list.querySelectorAll('[role="option"]'), function (opt) {
+          opt.addEventListener('click', function () {
+            input.setAttribute('aria-label', 'Selected ' + opt.textContent + '. Select a time, 12-hour format.');
+            list.style.display = 'none';
+          });
         });
       });
 
