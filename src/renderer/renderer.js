@@ -60,21 +60,6 @@ function applyStatusMessage(el, message) {
   el.classList.toggle('run-status--safe-to-help', isSafeToHelp);
 }
 
-/**
- * Formatuje koncowy tekst statusu po window.api.runSync(). Ostrzezenia z walidatora
- * raportu (np. "etykieta konta nie zawiera miasta") sa wysylane jako osobne komunikaty
- * 'sync:status' PRZED zwroceniem wyniku, wiec bez tego staly status "Gotowe: ..."
- * natychmiast by je nadpisal i ostrzezenie zniknieloby z GUI (zostaloby tylko w logu) -
- * dlatego wynik sync:run niesie tez warnings i doklejamy je tutaj do "Gotowe".
- */
-function formatSyncResultText(result) {
-  if (!result.ok) return `Blad: ${result.error}`;
-  if (result.warnings && result.warnings.length > 0) {
-    return `Gotowe (uwaga: ${result.warnings.join(' ; ')}): ${result.filePath}`;
-  }
-  return `Gotowe: ${result.filePath}`;
-}
-
 window.api.onSyncStatus(({ platformId, accountId, message }) => {
   const el = statusElements.get(`${platformId}:${accountId}`);
   applyStatusMessage(el, message);
@@ -485,7 +470,7 @@ async function runAllDownloads() {
     if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
 
     const result = await window.api.runSync(item.platformId, item.accountId);
-    if (statusSpan) statusSpan.textContent = formatSyncResultText(result);
+    if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
     doneCount += 1;
     // renderChecklistSection() tworzy nowy przycisk "Pobierz wszystkie" (podmienia caly
     // element), wiec trzeba go ponownie zablokowac - inaczej staje sie klikalny w trakcie
@@ -653,7 +638,7 @@ async function runAllGwarantDownloads() {
     if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
 
     const result = await window.api.runSync(item.platformId, item.accountId);
-    if (statusSpan) statusSpan.textContent = formatSyncResultText(result);
+    if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
     doneCount += 1;
     await refreshGwarantChecklist();
     if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = true;
@@ -1073,7 +1058,7 @@ function renderAccountCard(platform, account, options = {}) {
       await window.api.saveAccount(platform.id, collectAccountPayload());
       const result = await window.api.runSync(platform.id, account.accountId);
       runBtn.disabled = false;
-      statusSpan.textContent = formatSyncResultText(result);
+      statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
       if (result.ok) await renderChecklistSection();
     };
 

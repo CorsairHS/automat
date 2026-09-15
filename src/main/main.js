@@ -218,11 +218,7 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
   logger.info(`${logPrefix} start`);
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
-    const { warnings } = validateDownloadedReport({ platformId, account, filePath: result.filePath });
-    for (const warning of warnings) {
-      logger.warn(`${logPrefix} ${warning}`);
-      event.sender.send('sync:status', { platformId, accountId, message: `Uwaga: ${warning}` });
-    }
+    validateDownloadedReport({ platformId, account, filePath: result.filePath });
     const targetMap = account.group === 'gwarant' ? lastGwarantDownloads : lastDownloads;
     targetMap.set(`${platformId}:${accountId}`, {
       platformId,
@@ -233,7 +229,7 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
       downloadedAt: new Date().toISOString(),
     });
     logger.info(`${logPrefix} sukces: ${result.filePath}`);
-    return { ok: true, filePath: result.filePath, warnings };
+    return { ok: true, filePath: result.filePath };
   } catch (error) {
     logger.error(`${logPrefix} blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };

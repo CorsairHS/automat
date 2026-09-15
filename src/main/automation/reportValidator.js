@@ -159,16 +159,11 @@ function validateDownloadedReport({ platformId, account, filePath }) {
     );
   }
 
-  // Etykieta zawierajaca miasto to konwencja nazewnicza czesci partnerow (np. Nova:
-  // "DA Investment - Wroclaw"), nie regula biznesowa - inny partner moze nazywac konta
-  // dowolnie. Dlatego tylko ostrzegamy, zamiast blokowac upload.
-  const warnings = [];
   if (!labelMatchesCity(account.label, account.city)) {
-    warnings.push(
-      `Etykieta konta "${account.label}" nie zawiera skonfigurowanego miasta "${account.city}" - sprawdz, czy miasto w koncie jest poprawne.`
+    throw new ReportValidationError(
+      `Niespojna konfiguracja konta: etykieta "${account.label}" nie zawiera skonfigurowanego miasta "${account.city}". Sprawdz ustawienia konta.`
     );
   }
-  return { warnings };
 }
 
 module.exports = {

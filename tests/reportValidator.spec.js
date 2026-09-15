@@ -184,20 +184,13 @@ test.describe('validateDownloadedReport', () => {
     })).not.toThrow();
   });
 
-  test('niespojnosc etykiety konta z miastem nie blokuje, tylko ostrzega', () => {
+  test('blokuje niespojnosc etykiety konta z miastem', () => {
     const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
-    const result = validateDownloadedReport({
+    expect(() => validateDownloadedReport({
       platformId: 'bolt',
-      account: baseAccount({ label: 'Konto glowne' }),
+      account: baseAccount({ label: 'DA Investment - Warszawa' }),
       filePath,
-    });
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toMatch(/nie zawiera skonfigurowanego miasta "Wrocław"/);
-  });
-
-  test('zgodny plik: brak ostrzezen', () => {
-    const filePath = path.join('C:', 'downloads', 'bolt', 'x', 'Zarobki na kierowcę-31 sie 2026-1 wrz 2026-DA INVESTMENT SP_ Z O_O_.csv');
-    expect(validateDownloadedReport({ platformId: 'bolt', account: baseAccount(), filePath }).warnings).toEqual([]);
+    })).toThrow(ReportValidationError);
   });
 
   test('FreeNow: przepuszcza mimo braku firmy w pliku', () => {

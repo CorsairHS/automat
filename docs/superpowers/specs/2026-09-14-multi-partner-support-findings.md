@@ -69,5 +69,8 @@ ID System/City/Company sa odczytywane z szablonu formsetu i dopasowywane po teks
 po normalizacji `normalizeForCompare` > dla Company, jako jedynego pola, dodatkowo
 jednoznaczne dopasowanie "zawiera" gdy nic nie trafi dokladnie - patrz
 `findContainingOptions`; niejednoznacznosc na kazdym etapie = blad). Regula "etykieta
-zawiera miasto" jest ostrzezeniem. Niezweryfikowane na drugiej instalacji: filtr "False"
+zawiera miasto" pozostaje twarda blokada (decyzja uzytkownika 2026-09-15: raport nie moze
+trafic do innego miasta) - inni partnerzy musza miec miasto w nazwie konta.
+Zweryfikowane na zywym panelu Nova 2026-09-15: migracja adresu, upload (Bolt / Wroclaw /
+DA INVESTMENT SP Z O O) i usuwanie. Niezweryfikowane na drugiej instalacji: filtr "False"
 na liscie rozliczen.

@@ -25,7 +25,7 @@
 2. **Duplikaty w liscie System** (Nova: "Bolt"=17 i "BOLT"=65): upload najpierw szuka dokladnego tekstu z listy kandydatow (`'Bolt'` -> 17), potem rownosci po normalizacji; wiele roznych ID po normalizacji = blad "niejednoznaczna opcja" (nigdy losowy wybor). Usuwanie akceptuje wszystkie ID pasujace po normalizacji (zastepuje `SYSTEM_OPTION_ALIASES`).
 3. **Komunikat bledu wypisuje dostepne opcje** z panelu, zamiast odsylac do edycji `partnertax.js`.
 4. **Migracja `baseUrl` jednorazowa** (flaga `_migrations.partnertaxBaseUrl` w magazynie) - nowy partner, ktory doda konto bez adresu, dostanie czytelny blad, a nie ciche ustawienie adresu Nova.
-5. **Regula "etykieta konta musi zawierac miasto"** (`reportValidator.js`) przestaje blokowac - staje sie ostrzezeniem w statusie synchronizacji (to konwencja nazewnicza Nova, nie regula biznesowa).
+5. **Regula "etykieta konta musi zawierac miasto"** (`reportValidator.js`) przestaje blokowac - staje sie ostrzezeniem w statusie synchronizacji (to konwencja nazewnicza Nova, nie regula biznesowa). **ODRZUCONE 2026-09-15** przez uzytkownika po wdrozeniu (Task 6 wycofany): raport nie moze trafic do innego miasta, regula zostaje twarda blokada.
 6. **Company dopuszcza dopasowanie "zawiera" (tylko jako ostatni krok i tylko jednoznaczne).** Zrzut z zywego panelu Nova (Task 1): opcje firm to "UNITY DRIVE SP Z O O" / "DA INVESTMENT SP Z O O", a konta maja wpisane "Unity Drive" / "DA Investment" (tak dzialaly dawne klucze mapy). Sama rownosc po normalizacji zepsulaby upload u Nova. Dla System i City "zawiera" pozostaje zakazane ("Bolt" vs "Bolt Food", "Sulawki Bolt" vs "sulawki/augustow uber").
 
 ## Poza zakresem
