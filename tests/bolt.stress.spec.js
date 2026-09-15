@@ -42,6 +42,17 @@ test.describe('Bolt resilience', () => {
     expect(fs.readFileSync(result.filePath, 'utf8')).toContain('data,column');
   });
 
+  test('ekran logowania Bolta domyslnie po angielsku: automat wymusza polski przez ?lang=pl', async () => {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installBoltMock(context, { startLoggedIn: false });
+    const account = makeAccount();
+
+    const result = await syncBoltAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(mock.getLastLoginLang()).toBe('pl');
+    expect(fs.existsSync(result.filePath)).toBe(true);
+  });
+
   test('sesja juz zalogowana: pomija formularz logowania', async () => {
     const context = await browser.newContext({ acceptDownloads: true });
     const mock = await installBoltMock(context, { startLoggedIn: true });

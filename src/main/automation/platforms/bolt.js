@@ -8,8 +8,14 @@ const { humanClick, humanFill, humanDelay } = require('../humanInteraction');
 // jak w boltfood.js, jedno konto/login Bolt (email+haslo) moze miec dostep do wielu firm
 // (rozne miasta), kazda z innym ID. Konfigurowalne per konto (account.fields.orgId) - jedno
 // miasto = jedno konto w UI, ze wspolnymi danymi logowania i osobnym orgId/City/Company.
+//
+// "lang=pl" wymusza polski ekran logowania: Bolt Fleet bierze jezyk WYLACZNIE z tego
+// parametru (zweryfikowane na zywo 2026-09-15) - locale pl-PL przegladarki ignoruje i bez
+// parametru pokazuje "Sign in" zamiast "Zaloguj sie". Wybor nie jest zapamietywany, wiec
+// parametr musi byc w URL przy kazdym otwarciu. Wczesniej wychodzilo to tylko na nowym
+// koncie, bo konta z zapamietana sesja pomijaja ekran logowania.
 function buildLoginUrl(orgId) {
-  return `https://fleets.bolt.eu/login?to=%2F${orgId}%2Ffinances%2Freports%2FdriverEarnings&tab=email_username`;
+  return `https://fleets.bolt.eu/login?to=%2F${orgId}%2Ffinances%2Freports%2FdriverEarnings&tab=email_username&lang=pl`;
 }
 
 /**
@@ -43,7 +49,7 @@ async function syncBoltAccount({ context, account, downloadDir, statusCallback }
     log('Loguje sie do Bolta...');
     await humanFill(page.locator('#email'), account.fields.email);
     await humanFill(page.locator('#current-password'), account.fields.password);
-    // Konta partnerow maja UI ustawione na jezyk polski - dopasowujemy tylko polski tekst.
+    // Polski tekst gwarantuje "lang=pl" w buildLoginUrl() - dopasowujemy tylko polski.
     await humanClick(page.getByRole('button', { name: /zaloguj si./i }));
 
     const loggedIn = await waitForLoginCompletion(page, { isLoggedIn, statusCallback });

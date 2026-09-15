@@ -4,13 +4,13 @@ function toScriptLiteral(value) {
   return JSON.stringify(value);
 }
 
-function buildLoginHtml({ expectedEmail, expectedPassword, reportUrl }) {
+function buildLoginHtml({ expectedEmail, expectedPassword, reportUrl, buttonText }) {
   return `<!doctype html>
 <html>
 <body>
   <input id="email" />
   <input id="current-password" type="password" />
-  <button>Zaloguj się</button>
+  <button>${buttonText}</button>
   <script>
     document.querySelector('button').addEventListener('click', () => {
       const email = document.getElementById('email').value;
@@ -133,6 +133,7 @@ async function installBoltMock(context, scenario = {}) {
 
   let loginRequestCount = 0;
   let navigationClickCount = 0;
+  let lastLoginLang = null;
 
   await context.route('**/*', (route) => route.abort('blockedbyclient'));
 
@@ -145,6 +146,7 @@ async function installBoltMock(context, scenario = {}) {
 
     if (url.pathname === loginPath) {
       loginRequestCount += 1;
+      lastLoginLang = url.searchParams.get('lang');
       if (startLoggedIn) {
         return route.fulfill({
           status: 200,
@@ -159,6 +161,10 @@ async function installBoltMock(context, scenario = {}) {
           expectedEmail: credentials.email,
           expectedPassword: credentials.password,
           reportUrl,
+          // Jak prawdziwy Bolt Fleet (zweryfikowane na zywo 2026-09-15): jezyk ekranu
+          // logowania pochodzi WYLACZNIE z parametru ?lang= w URL - locale/Accept-Language
+          // przegladarki sa ignorowane, domyslnie jest angielski.
+          buttonText: lastLoginLang === 'pl' ? 'Zaloguj się' : 'Sign in',
         }),
       });
     }
@@ -191,6 +197,7 @@ async function installBoltMock(context, scenario = {}) {
     loginUrl,
     getLoginRequestCount: () => loginRequestCount,
     getNavigationClickCount: () => navigationClickCount,
+    getLastLoginLang: () => lastLoginLang,
   };
 }
 
