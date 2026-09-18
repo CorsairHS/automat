@@ -1,5 +1,6 @@
 const path = require('path');
 const { toISODate, computePeriodRange } = require('./dateRange');
+const { UBER_REPORT_TYPES } = require('../platforms');
 
 /**
  * Poniedzialek tygodnia ISO-8601 danego numeru/roku (tydzien 1 = tydzien zawierajacy
@@ -62,8 +63,16 @@ function parseBoltFilename(filename) {
   };
 }
 
+// Czlon z typem raportu ("payments_driver", "trips", ...) zalezy od typu wybranego w
+// konfiguracji konta, ale dopuszczamy wylacznie ZNANE slugi zamiast dowolnego tekstu:
+// przy dowolnym wzorcu regex zjadlby poczatek nazwy firmy i cicho zwracal obcieta firme,
+// co przepuscilaby walidacja zgodnosci firmy.
+const UBER_REPORT_SLUG_PATTERN = UBER_REPORT_TYPES.map((type) => type.fileSlug).join('|');
+
 function parseUberFilename(filename) {
-  const match = filename.match(/^(\d{4})(\d{2})(\d{2})-(\d{4})(\d{2})(\d{2})-payments_driver-(.+)\.csv$/i);
+  const match = filename.match(
+    new RegExp(`^(\\d{4})(\\d{2})(\\d{2})-(\\d{4})(\\d{2})(\\d{2})-(?:${UBER_REPORT_SLUG_PATTERN})-(.+)\\.csv$`, 'i')
+  );
   if (!match) {
     throw new Error(`Nierozpoznany format nazwy pliku Uber: "${filename}"`);
   }

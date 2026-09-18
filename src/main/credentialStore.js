@@ -90,6 +90,10 @@ function saveAccount(platformId, account) {
     city: account.city || '',
     company: account.company || '',
     periodMode: account.periodMode || platform.defaultPeriodMode || 'current_week',
+    // Tylko Uber ma wybor typu raportu (platform.defaultReportType); pozostale platformy
+    // zapisuja tu null. Konta zapisane przed dodaniem tego pola nie maja go w pliku -
+    // automatyka i tak traktuje brak wartosci jak typ domyslny.
+    reportType: account.reportType || platform.defaultReportType || null,
     periodFrom: account.periodFrom || null,
     periodTo: account.periodTo || null,
     group: account.group || (existingEntry ? existingEntry.group : null) || 'default',

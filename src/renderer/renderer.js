@@ -958,6 +958,14 @@ function renderAccountCard(platform, account, options = {}) {
     inputs.company = companyInput;
     card.appendChild(companyRow);
 
+    // Wybor typu raportu ma tylko Uber (jako jedyny dostaje z main.js liste reportTypes) -
+    // pozostale platformy pobieraja swoj jedyny raport bez wyboru.
+    if (platform.reportTypes) {
+      const reportTypeBlock = renderReportTypeSelector(account, platform);
+      card.appendChild(reportTypeBlock.element);
+      inputs.reportType = reportTypeBlock.getValue;
+    }
+
     const periodBlock = renderPeriodSelector(account, platform);
     card.appendChild(periodBlock.element);
     inputs.periodMode = periodBlock.getMode;
@@ -981,6 +989,7 @@ function renderAccountCard(platform, account, options = {}) {
     if (platform.multiAccount) {
       payload.city = inputs.city.value;
       payload.company = inputs.company.value;
+      if (inputs.reportType) payload.reportType = inputs.reportType();
       payload.periodMode = inputs.periodMode();
       payload.periodFrom = inputs.periodFrom();
       payload.periodTo = inputs.periodTo();
@@ -1068,6 +1077,35 @@ function renderAccountCard(platform, account, options = {}) {
   }
 
   return card;
+}
+
+/**
+ * Lista "Typ raportu" (tylko Uber). Etykiety sa dokladnie takie, jakie Uber pokazuje w
+ * polu "Typ zgloszenia" w dialogu "Wygeneruj raport" - zeby wybor w automacie dalo sie
+ * bez zastanowienia zestawic z tym, co widac na stronie. Konto bez zapisanego typu
+ * pokazuje typ domyslny ("Platnosci - kierowca"), czyli ten uzywany przed dodaniem tej
+ * opcji.
+ */
+function renderReportTypeSelector(account, platform) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-row';
+
+  const label = document.createElement('label');
+  label.textContent = 'Typ raportu';
+  wrapper.appendChild(label);
+
+  const select = document.createElement('select');
+  const currentType = (account && account.reportType) || platform.defaultReportType;
+  for (const type of platform.reportTypes) {
+    const option = document.createElement('option');
+    option.value = type.id;
+    option.textContent = type.label;
+    option.selected = type.id === currentType;
+    select.appendChild(option);
+  }
+  wrapper.appendChild(select);
+
+  return { element: wrapper, getValue: () => select.value };
 }
 
 function renderPeriodSelector(account, platform) {

@@ -92,8 +92,24 @@ test.describe('parseUberFilename', () => {
     });
   });
 
+  test('parsuje tez inne typy raportu niz platnosci kierowcy', () => {
+    const result = parseUberFilename('20260824-20260825-payments_organization-UNITY_DRIVE_sp_z_o_o.csv');
+    expect(result).toEqual({
+      company: 'UNITY_DRIVE_sp_z_o_o',
+      periodStart: '2026-08-24',
+      periodEnd: '2026-08-25',
+    });
+    expect(parseUberFilename('20260824-20260825-trips-UNITY_DRIVE.csv').company).toBe('UNITY_DRIVE');
+  });
+
   test('rzuca na nierozpoznana nazwe', () => {
     expect(() => parseUberFilename('raport.csv')).toThrow();
+  });
+
+  // Czlon z typem raportu musi byc jednym ZE ZNANYCH slugow, nie dowolnym tekstem -
+  // inaczej regex "zjadalby" poczatek nazwy firmy i cicho zwracal obcieta firme.
+  test('rzuca na nieznany czlon typu raportu', () => {
+    expect(() => parseUberFilename('20260824-20260825-jakis_inny-UNITY_DRIVE.csv')).toThrow();
   });
 });
 

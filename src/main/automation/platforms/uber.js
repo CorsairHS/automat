@@ -2,6 +2,7 @@ const path = require('path');
 const { computePeriodRange } = require('../dateRange');
 const { waitForAuthStateToSettle, SAFE_TO_HELP_MARKER } = require('../loginHelpers');
 const { humanClick, humanDelay } = require('../humanInteraction');
+const { resolveUberReportType, pickReportTypeOptionIndex } = require('../uberReportTypes');
 
 const LOGIN_URL = 'https://supplier.uber.com/';
 
@@ -122,19 +123,23 @@ async function syncUberAccount({ context, account, downloadDir, statusCallback }
   // - patrz komentarz przy `mondayToMonday` w dateRange.js.
   const { from, to } = computePeriodRange(account, new Date(), { mondayToMonday: true });
 
+  // Typ raportu pochodzi z konfiguracji konta; konta bez ustawienia dostaja "Platnosci -
+  // kierowca", czyli dokladnie to, co bylo tu wczesniej zaszyte na sztywno.
+  const reportType = resolveUberReportType(account.reportType);
+
   // Nazwa pliku/wiersza wygenerowanego raportu ma stabilny, jezykowo-niezalezny prefiks
-  // "RRRRMMDD-RRRRMMDD-payments_driver..." (zweryfikowane na pobranych plikach, np.
+  // "RRRRMMDD-RRRRMMDD-<typ raportu>..." (zweryfikowane na pobranych plikach, np.
   // "20260817-20260821-payments_driver-UNITY_DRIVE..."). Przed generowaniem nowego
   // raportu sprawdzamy, czy taki juz istnieje na liscie - klient zglosil, ze kazde
   // uruchomienie automatu tworzylo nowy raport nawet dla juz pobranego okresu, zasmiecajac
   // liste "Reports" duplikatami. Jesli pasujacy wiersz juz istnieje, pobieramy go zamiast
   // generowac kolejny.
-  const reportNamePrefix = `${from.replace(/-/g, '')}-${to.replace(/-/g, '')}-payments_driver`;
+  const reportNamePrefix = `${from.replace(/-/g, '')}-${to.replace(/-/g, '')}-${reportType.fileSlug}`;
 
   // Zweryfikowane na zywym DOM (2026-08-18): zakladka "Reports" (data-testid stabilne
   // niezaleznie od jezyka), przycisk "Generate Report" (data-tracking-name stabilne)
   // otwiera panel z polami Report type / Start Date / End Date / Select organizations.
-  log(`Sprawdzam, czy raport "Payments Driver" za okres ${from} - ${to} juz istnieje...`);
+  log(`Sprawdzam, czy raport "${reportType.label}" za okres ${from} - ${to} juz istnieje...`);
   await humanClick(page.locator('[data-testid="header-nav-/reports"]'));
   await humanDelay(400, 900);
   // Tabela raportow doladowuje sie asynchronicznie po przelaczeniu zakladki - bez
@@ -1050,6 +1055,28 @@ async function navigateCalendarMonths(page, deltaMonths) {
 }
 
 /**
+ * Pozycje rozwinietej listy "Typ zgloszenia", ZAWEZONE do tej jednej listy. Zawezenie
+ * jest konieczne, bo `allTextContents()` czyta takze elementy ukryte, a na stronie sa
+ * inne listy z role="option" (m.in. okna rozliczeniowe w panelu przedzialu czasowego) -
+ * bez zawezenia teksty z nich wmieszalyby sie w liste typow raportu i przesunely indeksy.
+ * Kolejnosc: lista wskazana przez aria-controls comboboksa (tak jest na zywym DOM), potem
+ * jedyna widoczna w tym momencie lista, a na koncu widoczne opcje gdziekolwiek.
+ */
+async function reportTypeOptionsLocator(page) {
+  const controls = await page.locator('#report-type').getAttribute('aria-controls').catch(() => null);
+  if (controls) {
+    const options = page.locator(`[id="${controls}"] [role="option"]`);
+    if ((await options.count()) > 0) return options;
+  }
+  const visibleListbox = page.locator('[role="listbox"]:visible').first();
+  if ((await visibleListbox.count()) > 0) {
+    const options = visibleListbox.locator('[role="option"]');
+    if ((await options.count()) > 0) return options;
+  }
+  return page.locator('[role="option"]:visible');
+}
+
+/**
  * Jedna proba wypelnienia i wyslania formularza "Wygeneruj raport" (typ -> daty ->
  * organizacja -> Wygeneruj). Zaklada, ze dialog jest juz otwarty (otwiera go wywolujacy).
  * Rzuca blad przy pierwszej niespojnosci (zla data, brak organizacji, itp.) zamiast probowac
@@ -1058,18 +1085,26 @@ async function navigateCalendarMonths(page, deltaMonths) {
  */
 async function attemptGenerateUberReport(page, from, to, account, log) {
   // Domyslny "Report type" to "Driver Activity"/"Czas i odleglosc kierowcy" - trzeba
-  // przelaczyc na "Payments Driver". Jezyk UI jest nieprzewidywalny (widziany polski i
-  // angielski dla tego samego konta w roznych sesjach) - dopasowujemy oba warianty.
-  // Combobox ma stabilne id="report-type"; lista opcji to prawdziwy role="option" (li),
-  // ktory zawiera zagniezdzony div z tym samym tekstem - getByRole unikalnie trafia w
-  // zewnetrzny element, w przeciwienstwie do filtrowania po [aria-selected] (kolizja z
-  // zagniezdzonym divem).
+  // przelaczyc na typ wybrany w konfiguracji konta (domyslnie "Platnosci - kierowca").
+  // Jezyk UI jest nieprzewidywalny (widziany polski i angielski dla tego samego konta w
+  // roznych sesjach), a opcje listy nie maja zadnego stabilnego atrybutu, wiec czytamy
+  // teksty wszystkich pozycji i dopasowujemy je po normalizacji - patrz
+  // uberReportTypes.js. Combobox ma stabilne id="report-type"; kazda opcja to
+  // li[role="option"] z zagniezdzonym divem o tym samym tekscie, wiec zliczamy TYLKO
+  // zewnetrzne elementy (role="option"), inaczej kazda pozycja liczylaby sie dwa razy.
+  const reportType = resolveUberReportType(account.reportType);
   await dismissChatBubble(page);
   await humanClick(page.locator('#report-type'));
   await humanDelay(300, 700);
-  await humanClick(
-    page.getByRole('option', { name: /^Payments Driver$|^P[łl]atno[śs]ci\s*[-–]\s*kierowc/i })
-  );
+  const reportTypeOptions = await reportTypeOptionsLocator(page);
+  const optionTexts = (await reportTypeOptions.allTextContents()).map((text) => text.trim());
+  const optionIndex = pickReportTypeOptionIndex(optionTexts, reportType);
+  if (optionIndex < 0) {
+    throw new Error(
+      `Na liscie "Typ zgloszenia" w Uberze nie ma opcji "${reportType.label}" ("${reportType.labelEn}"). Uber pokazuje: ${optionTexts.map((text) => `"${text}"`).join(', ')}. Wybierz jeden z tych typow w konfiguracji konta.`
+    );
+  }
+  await humanClick(reportTypeOptions.nth(optionIndex));
   await humanDelay(400, 900);
 
   // Zweryfikowane na zywym DOM (zrzut od klienta, 2026-09-07): zewnetrzne pole "Przedzial

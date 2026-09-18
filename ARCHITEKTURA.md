@@ -143,3 +143,29 @@ zostac wgrany), zgodnie z decyzja klienta ("nie chcemy, zeby to cos popsulo").
 Dotyczy to tez reguly "etykieta konta zawiera miasto" - rozwazone przy wsparciu wielu
 partnerow (2026-09-14) zlagodzenie do ostrzezenia zostalo odrzucone (2026-09-15): raport
 nie moze trafic do innego miasta. Kazdy partner musi wiec miec miasto w nazwie konta.
+
+## ✅ Uber: wybor typu raportu w konfiguracji konta (2026-09-18)
+
+Do tej pory typ raportu byl zaszyty na sztywno ("Platnosci - kierowca"). Teraz jest polem
+konta, jak okres pobierania:
+- Slownik pozycji listy "Typ zgloszenia" siedzi w `src/main/platforms.js`
+  (`UBER_REPORT_TYPES`) - 11 typow, kazdy z etykieta polska i angielska oraz z `fileSlug`
+  (czlon nazwy pobieranego pliku). Lista jedzie do renderera razem z `PLATFORMS`, wiec
+  `<select>` w karcie konta nie wymaga zadnego dodatkowego IPC.
+- Domyslny typ (`DEFAULT_UBER_REPORT_TYPE_ID = 'payments_driver'`) obowiazuje wszedzie
+  tam, gdzie konto nie ma zapisanego pola `reportType` - czyli wszystkie konta zalozone
+  przed ta zmiana dzialaja dokladnie jak wczesniej.
+- Dopasowanie opcji na stronie idzie PO TEKSCIE i tak musi zostac: pozycje listy
+  (`li[role="option"]`) nie maja zadnego stabilnego atrybutu, a `value="REPORT_TYPE_*"`
+  jest wylacznie na divie z juz wybrana wartoscia comboboksa. Porownanie przechodzi przez
+  `normalizeForCompare` (`src/main/automation/uberReportTypes.js`), bo zywe etykiety
+  zawieraja twarda spacje i polkwadrat. Gdy wybranego typu nie ma na liscie, blad wypisuje
+  faktyczne teksty opcji ze strony - poprawka to wtedy jedna linijka w slowniku.
+- `parseUberFilename` (`reportValidator.js`) akceptuje czlon typu raportu z listy znanych
+  slugow zamiast samego `payments_driver`, ale tylko znane slugi - dowolny wzorzec zjadalby
+  poczatek nazwy firmy i cicho zwracal obcieta firme.
+
+UWAGA: typy nieplatnicze ("Przejazdy", "Status kierowcy", ...) sa dostepne na zyczenie
+klienta, ale nie byly sprawdzone end-to-end - maja inny uklad kolumn, wiec dalszy import do
+PartnerTax moze ich nie przyjac. Pewne angielskie etykiety to tylko "Payments Driver" i
+"Driver Activity" (widziane na zywo); reszta to najlepsze znane odpowiedniki.

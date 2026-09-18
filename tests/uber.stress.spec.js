@@ -311,4 +311,62 @@ test.describe('Uber resilience', () => {
     expect(fs.existsSync(result.filePath)).toBe(true);
     expect(mock.state.checkedOrgNames).toEqual(['DA Investment sp. z o.o.']);
   });
+  test('domyslnie (konto bez ustawionego typu) wybiera "Platnosci - kierowca"', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, { reportAlreadyExists: false, requireReloadForDownloadReady: false });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.reportTypeSelected).toBe('Płatności – kierowca');
+  });
+
+  test('typ raportu z konfiguracji konta: wybiera "Platnosci - organizacja" i szuka pliku z jej slugiem', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      reportNamePrefix: '20260805-20260807-payments_organization',
+    });
+    const account = makeAccount({ reportType: 'payments_organization' });
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(mock.state.reportTypeSelected).toBe('Płatności – organizacja');
+    expect(path.basename(result.filePath)).toContain('payments_organization');
+  });
+
+  test('angielskie UI: ten sam typ konta trafia w angielska etykiete opcji', async () => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    const mock = await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      reportTypeOptions: ['Driver Activity', 'Payments Driver', 'Payments Organization', 'Trips'],
+    });
+    const account = makeAccount();
+
+    const result = await syncUberAccount({ context, account, downloadDir, statusCallback: () => {} });
+
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(mock.state.reportTypeSelected).toBe('Payments Driver');
+  });
+
+  test('brak wybranego typu na liscie Ubera: blad wypisuje faktyczne opcje ze strony', async () => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({ acceptDownloads: true });
+    await installUberMock(context, {
+      reportAlreadyExists: false,
+      requireReloadForDownloadReady: false,
+      reportTypeOptions: ['Przejazdy', 'Status kierowcy'],
+    });
+    const account = makeAccount();
+
+    await expect(
+      syncUberAccount({ context, account, downloadDir, statusCallback: () => {} })
+    ).rejects.toThrow(/Status kierowcy/);
+  });
 });

@@ -1,5 +1,26 @@
 const DEFAULT_CREDENTIALS = { email: 'partner@example.com', password: 'secret123' };
 
+/**
+ * Lista "Typ zgloszenia" przepisana ZNAK W ZNAK z zywego DOM (zrzut od klienta
+ * 2026-09-18): z twarda spacja (\u00a0) w "Czas i odleglosc..." i polkwadratem (–) w
+ * "Platnosci – kierowca". Te dwa znaki wywracaja naiwne dopasowanie tekstu, wiec mock
+ * musi je odtwarzac, inaczej testy przepuszczalyby kod, ktory na zywo nie dziala.
+ * Zywe listy roznia sie miedzy kontami (widziano warianty 10- i 11-pozycyjne), wiec
+ * scenariusz moze podac wlasna liste.
+ */
+const DEFAULT_REPORT_TYPE_OPTIONS = [
+  'Czas i\u00a0odległość kierowcy',
+  'Czas i\u00a0odległość pojazdu',
+  'Jakość obsługi oferowanej przez kierowcę',
+  'Osiągi pojazdu',
+  'Płatności – kierowca',
+  'Płatności – organizacja',
+  'Przejazdy',
+  'Status kierowcy',
+  'Transakcja płatnicza',
+  'Wyświetl aktywność kierowcy',
+];
+
 function lit(value) {
   return JSON.stringify(value);
 }
@@ -62,6 +83,7 @@ function buildAppHtml(state, options) {
     settlementSelectionClosesPanel = false,
     timeFramePanelIgnoresTriggerClose = false,
     orgTriggerWithoutAriaControls = false,
+    reportTypeOptions = DEFAULT_REPORT_TYPE_OPTIONS,
   } = options;
 
   const existingRows = state.reportReady
@@ -127,11 +149,16 @@ function buildAppHtml(state, options) {
     <div id="generate-dialog" style="display:none">
       <h2>Wygeneruj raport</h2>
 
-      <div id="report-type">Driver Activity</div>
-      <div id="report-type-options" style="display:none">
-        <div role="option">Driver Activity</div>
-        <div role="option">Payments Driver</div>
-      </div>
+      <!-- Na zywo pole typu raportu to input[role="combobox"] z aria-controls
+           wskazujacym na ul[role="listbox"], a kazda opcja to li[role="option"] z
+           ZAGNIEZDZONYM divem o tym samym tekscie (zrzut DOM 2026-09-18). Zagniezdzenie
+           jest tu istotne: kod czytajacy teksty opcji musi brac li, nie oba elementy. -->
+      <input id="report-type" role="combobox" aria-controls="report-type-listbox" readonly value="Wyświetl aktywność kierowcy" />
+      <ul id="report-type-listbox" role="listbox" style="display:none">
+        ${reportTypeOptions
+          .map((label, i) => `<li role="option" id="report-type-option-${i}"><div>${label}</div></li>`)
+          .join('\n')}
+      </ul>
 
       <input id="time-frame-trigger" style="display:block" readonly placeholder="Wybierz przedział czasowy raportu" value="${prefilledTimeFrameValue}" />
       <div id="time-frame-panel" style="display:none; position:absolute; z-index:10; background:#fff; border:1px solid #333;">
@@ -256,12 +283,13 @@ function buildAppHtml(state, options) {
       });
 
       document.getElementById('report-type').addEventListener('click', function () {
-        document.getElementById('report-type-options').style.display = '';
+        document.getElementById('report-type-listbox').style.display = '';
       });
-      Array.prototype.forEach.call(document.querySelectorAll('#report-type-options [role="option"]'), function (opt) {
+      Array.prototype.forEach.call(document.querySelectorAll('#report-type-listbox [role="option"]'), function (opt) {
         opt.addEventListener('click', function () {
-          document.getElementById('report-type').textContent = opt.textContent;
-          document.getElementById('report-type-options').style.display = 'none';
+          document.getElementById('report-type').value = opt.textContent;
+          document.getElementById('report-type-listbox').style.display = 'none';
+          fetch('/api/mock/report-type-selected', { method: 'POST', body: opt.textContent });
         });
       });
 
@@ -431,7 +459,11 @@ function buildAppHtml(state, options) {
               var url = URL.createObjectURL(blob);
               var a = document.createElement('a');
               a.href = url;
-              a.download = 'payments_driver.csv';
+              // Na zywo pobierany plik nazywa sie tak samo jak wiersz w tabeli raportow
+              // ("RRRRMMDD-RRRRMMDD-<typ raportu>-<FIRMA>.csv"), wiec mock tez wyprowadza
+              // nazwe z prefiksu scenariusza - inaczej test nie wykrylby, ze automat
+              // pobral raport innego typu, niz wybrano na koncie.
+              a.download = ${lit(`${reportNamePrefix}-UNITY_DRIVE_sp_z_o_o.csv`)};
               document.body.appendChild(a);
               a.click();
               a.remove();
@@ -473,6 +505,7 @@ async function installUberMock(context, scenario = {}) {
     settlementSelectionClosesPanel = false,
     timeFramePanelIgnoresTriggerClose = false,
     orgTriggerWithoutAriaControls = false,
+    reportTypeOptions,
   } = scenario;
 
   const state = {
@@ -490,6 +523,7 @@ async function installUberMock(context, scenario = {}) {
     settlementWindowSelected: null,
     settlementPickerClicks: 0,
     timeFrameTriggerClicks: 0,
+    reportTypeSelected: null,
   };
 
   const options = {
@@ -509,6 +543,7 @@ async function installUberMock(context, scenario = {}) {
     settlementSelectionClosesPanel,
     timeFramePanelIgnoresTriggerClose,
     orgTriggerWithoutAriaControls,
+    ...(reportTypeOptions ? { reportTypeOptions } : {}),
     ...(organizations ? { organizations } : {}),
   };
 
@@ -567,6 +602,11 @@ async function installUberMock(context, scenario = {}) {
 
     if (url.pathname === '/api/mock/settlement-window-selected' && method === 'POST') {
       state.settlementWindowSelected = await route.request().postData();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    }
+
+    if (url.pathname === '/api/mock/report-type-selected' && method === 'POST') {
+      state.reportTypeSelected = await route.request().postData();
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     }
 
