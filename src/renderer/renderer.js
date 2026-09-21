@@ -173,6 +173,33 @@ async function render() {
 }
 
 /**
+ * Przycisk motywu ciemny/jasny w naglowku. Sama logika (zapis wyboru, data-theme na <html>)
+ * siedzi w theme.js, ladowanym w <head>; tu tylko ikona (ksiezyc w jasnym, slonce w
+ * ciemnym - pokazuje motyw, na jaki przelaczy klikniecie) i etykieta.
+ */
+function setupThemeToggle() {
+  const button = document.getElementById('theme-toggle');
+  const sun = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  const moon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+
+  const refresh = () => {
+    const isLight = window.themeToggle.current() === 'light';
+    button.innerHTML = isLight ? moon : sun;
+    const label = isLight ? 'Przelacz na tryb ciemny' : 'Przelacz na tryb jasny';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  };
+
+  button.onclick = () => {
+    window.themeToggle.toggle();
+    refresh();
+  };
+  // Zmiana motywu systemu (gdy nic nie wybrano recznie) tez zmienia data-theme.
+  new MutationObserver(refresh).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  refresh();
+}
+
+/**
  * Nadrzedny pasek zakladek "Konta" / "Aktualizacje" - przelacza widocznosc calego
  * dotychczasowego UI (#platform-list, budowany przez render()) i nowej, niezaleznej
  * sekcji aktualizacji (#updates-view, patrz renderUpdatesSection). W przeciwienstwie do
@@ -1170,5 +1197,6 @@ function renderPeriodSelector(account, platform) {
 
 render();
 
+setupThemeToggle();
 renderMainTabs();
 renderUpdatesSection();
