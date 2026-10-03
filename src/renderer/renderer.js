@@ -89,6 +89,12 @@ function applyUpdateState() {
   }
 }
 
+function sortByKeyOrder(items, orderedKeys) {
+  const rank = new Map(orderedKeys.map((key, index) => [key, index]));
+  const rankOf = (item) => rank.get(`${item.platformId}:${item.accountId}`) ?? orderedKeys.length;
+  items.sort((a, b) => rankOf(a) - rankOf(b));
+}
+
 async function render() {
   CONFIG = await window.api.getPlatformsConfig();
 
@@ -144,6 +150,12 @@ async function render() {
       section: await renderPlatformSection(platform, accounts, { showAddButton: false, allowGuarantorButton: false }),
     });
   }
+
+  // "Kontrola pobran" i "Pobierz wszystkie" ida w kolejnosci ostatniego zamknietego
+  // rozliczenia klienta (firma -> miasto -> platforma, patrz src/main/settlementOrder.js),
+  // nie pogrupowane po platformie jak zakladki.
+  sortByKeyOrder(reportAccountsCache, await window.api.getReportOrder('default'));
+  sortByKeyOrder(gwarantReportAccountsCache, await window.api.getReportOrder('gwarant'));
 
   const tabIds = [...CONFIG.platforms.map((p) => p.id), 'gwarant'];
   if (!activePlatformId || !tabIds.includes(activePlatformId)) {
@@ -396,6 +408,53 @@ function buildBulkPeriodModeRow(group) {
   return row;
 }
 
+/**
+ * Wiersz do sprawdzenia pobranych plikow przed wgraniem do PartnerTax - klient poprosil o
+ * latwy sposob podejrzenia tego, co sie faktycznie pobralo. "Pokaz folder" otwiera od razu
+ * folder z plikami w Finderze/Eksploratorze (najszybsze, dziala nawet bez niczego
+ * pobranego - pokazuje pusty/starszy folder). "Eksportuj ZIP" pakuje WSZYSTKIE aktualnie
+ * pobrane pliki (ta sama lista co przy wgrywaniu do PartnerTax) w jedno archiwum do
+ * zapisania gdziekolwiek (np. do przeslania dalej) - wymaga co najmniej jednego pobrania.
+ */
+function buildDownloadsCheckRow(downloadsCount) {
+  const row = document.createElement('div');
+  row.className = 'run-row';
+
+  const showFolderBtn = document.createElement('button');
+  showFolderBtn.type = 'button';
+  showFolderBtn.className = 'btn-secondary';
+  showFolderBtn.textContent = 'Pokaz folder pobranych plikow';
+  showFolderBtn.onclick = () => window.api.showDownloadsFolder();
+
+  const exportZipBtn = document.createElement('button');
+  exportZipBtn.type = 'button';
+  exportZipBtn.className = 'btn-secondary';
+  exportZipBtn.textContent = 'Eksportuj ZIP';
+  exportZipBtn.disabled = downloadsCount === 0;
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+
+  exportZipBtn.onclick = async () => {
+    exportZipBtn.disabled = true;
+    statusSpan.textContent = 'Pakuje do ZIP...';
+    const result = await window.api.exportDownloadsZip();
+    exportZipBtn.disabled = false;
+    if (result.canceled) {
+      statusSpan.textContent = '';
+    } else if (!result.ok) {
+      statusSpan.textContent = `Blad: ${result.error}`;
+    } else {
+      statusSpan.textContent = `Zapisano ZIP (${result.count} plik(ow)): ${result.filePath}`;
+    }
+  };
+
+  row.appendChild(showFolderBtn);
+  row.appendChild(exportZipBtn);
+  row.appendChild(statusSpan);
+  return row;
+}
+
 async function renderChecklistSection() {
   const downloads = await window.api.getDownloadsStatus();
   const downloadedMap = new Map(downloads.map((d) => [`${d.platformId}:${d.accountId}`, d]));
@@ -433,6 +492,8 @@ async function renderChecklistSection() {
     section.appendChild(runRow);
     section.appendChild(buildBulkPeriodModeRow('default'));
   }
+
+  section.appendChild(buildDownloadsCheckRow(downloads.length));
 
   if (reportAccountsCache.length === 0) {
     const empty = document.createElement('p');
@@ -729,10 +790,10 @@ function renderUploadSection() {
 /**
  * Usuwanie raportow z PartnerTax admin - ta sama sciezka co wgrywanie (admin -> settlements
  * -> pierwsze niezakonczone rozliczenie), tylko zamiast dodawac Data source, zaznacza
- * checkbox DELETE na istniejacym wierszu i zapisuje. Usuwa TYLKO Uber/Bolt/FreeNow (nic
- * innego), po jednym rekordzie na raz - kazdy system to osobny przejazd sciezki, bo
- * formularz przeladowuje sie po kazdym zapisie. Przycisk jest globalny (nie per-konto),
- * jak przy wgrywaniu.
+ * checkbox DELETE na istniejacym wierszu i zapisuje. Usuwa WSZYSTKIE wiersze Uber/Bolt/
+ * FreeNow/Bolt Food (nic innego) w jednym uruchomieniu - kazdy wiersz to osobny przejazd
+ * sciezki (formularz przeladowuje sie po kazdym zapisie), ale wszystko dzieje sie w jednej
+ * sesji przegladarki. Przycisk jest globalny (nie per-konto), jak przy wgrywaniu.
  */
 function renderDeleteSection() {
   const existing = document.getElementById('delete-section');
@@ -748,7 +809,7 @@ function renderDeleteSection() {
 
   const note = document.createElement('p');
   note.className = 'platform-note';
-  note.textContent = 'Usuwa z pierwszego niezakonczonego rozliczenia (Finished = False) po jednym raporcie Uber/Bolt/FreeNow - nic innego. Kazdy system to osobne zaznaczenie DELETE i zapis ("Save and continue editing").';
+  note.textContent = 'Usuwa z pierwszego niezakonczonego rozliczenia (Finished = False) WSZYSTKIE raporty Uber/Bolt/FreeNow/Bolt Food - nic innego. Kazdy wiersz to osobne zaznaczenie DELETE i zapis ("Save and continue editing"), ale wszystko w jednym uruchomieniu przegladarki.';
   section.appendChild(note);
 
   const runRow = document.createElement('div');

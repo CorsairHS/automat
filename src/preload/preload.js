@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   listAccounts: (platformId, group) => ipcRenderer.invoke('accounts:list', platformId, group),
   saveAccount: (platformId, account) => ipcRenderer.invoke('accounts:save', platformId, account),
   deleteAccount: (platformId, accountId) => ipcRenderer.invoke('accounts:delete', platformId, accountId),
+  getReportOrder: (group) => ipcRenderer.invoke('accounts:reportOrder', group),
   setPeriodModeForAll: (periodMode, group) => ipcRenderer.invoke('accounts:setPeriodModeAll', periodMode, group),
   duplicateToGuarantor: (platformId, accountId) => ipcRenderer.invoke('accounts:duplicateToGuarantor', platformId, accountId),
   runSync: (platformId, accountId) => ipcRenderer.invoke('sync:run', platformId, accountId),
@@ -21,6 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   runUpload: () => ipcRenderer.invoke('upload:run'),
   getDownloadsStatus: () => ipcRenderer.invoke('downloads:status'),
   getGwarantDownloadsStatus: () => ipcRenderer.invoke('downloads:statusGwarant'),
+  showDownloadsFolder: () => ipcRenderer.invoke('downloads:showFolder'),
+  exportDownloadsZip: () => ipcRenderer.invoke('downloads:exportZip'),
   onUploadStatus: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('upload:status', listener);

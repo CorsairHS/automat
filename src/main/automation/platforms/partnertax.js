@@ -194,6 +194,16 @@ async function clickSaveAndVerify(page, verifyFn, { timeoutMs = 15 * 60 * 1000, 
       await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
     }
     if (await verifyFn()) return;
+    // Django odrzucil formularz (np. blad walidacji innego wiersza) - zapis nigdy nie
+    // zostanie potwierdzony, wiec zamiast czekac do konca timeoutu (wyglada jak
+    // zawieszenie) konczymy od razu z tekstem bledu ze strony.
+    const errorText = await page
+      .locator('.errornote')
+      .evaluateAll((els) => els.map((el) => el.textContent).join(' '))
+      .catch(() => null);
+    if (errorText) {
+      throw new Error(`PartnerTax admin odrzucil zapis: ${errorText.trim()}`);
+    }
     await page.waitForTimeout(1000);
   }
   throw new Error('Zapis w PartnerTax admin nie zostal potwierdzony w wyznaczonym czasie.');
@@ -300,16 +310,6 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback })
 }
 
 /**
- * Usuwa jeden wiersz Data source dla danej platformy (Bolt/Uber/FreeNow, wg
- * SYSTEM_LABEL_CANDIDATES) z aktualnie otwartego rozliczenia: zaznacza jego checkbox
- * DELETE (`sources-N-DELETE`) i zapisuje formularz ("Save and continue editing" - jak przy
- * dodawaniu pliku, ten sam wymog PartnerTax admin). Usuwa TYLKO pierwszy pasujacy wiersz
- * na wywolanie - klient wskazal wprost, ze kasuje sie po jednym rekordzie na raz i sciezke
- * (otworz rozliczenie -> znajdz system -> zaznacz DELETE -> zapisz) powtarza sie osobno
- * dla kazdego systemu. Zwraca false, jesli dla danej platformy nie ma zadnego wiersza do
- * usuniecia (nic sie wtedy nie zmienia w formularzu).
- */
-/**
  * Zwraca wartosc System (ID opcji odczytanej z panelu, patrz readTemplateOptions) dla
  * kazdego wiersza Data source w kolejnosci wystapienia w formularzu. Juz zapisane wiersze
  * pokazuja pole System jako readonly link do "/admin/systems/system/<id>/change/" (nie
@@ -318,87 +318,52 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback })
  * ewentualnego swiezo dodanego, niezapisanego jeszcze wiersza (select, nie link) wartosc
  * dolaczana jest tak samo, zeby kolejnosc/indeksy pokrywaly sie z kolejnoscia checkboxow
  * DELETE w formularzu.
+ *
+ * Odczyt jest JEDNYM atomowym evaluateAll. Wczesniej bylo count() + osobne
+ * nth(i).evaluate() na kazdy wiersz - gdy strona przeladowala sie po zapisie miedzy tymi
+ * wywolaniami (wierszy jest juz mniej), nth(i) czekal w nieskonczonosc na element, ktory
+ * juz nie istnieje. To bylo zglaszane przez klienta "przy usuwaniu system sie zawiesza i
+ * nie dziala dalej". Zwraca null, gdy strona jest akurat w trakcie nawigacji (wolajacy
+ * po prostu ponawia).
  */
 async function getSystemRowValues(page) {
-  const rowValues = [];
-  const rows = page.locator(
-    `${realSourceFieldSelector('select', 'system')}, a[href^="/admin/systems/system/"][href$="/change/"]`,
-  );
-  const count = await rows.count();
-  for (let i = 0; i < count; i += 1) {
-    const row = rows.nth(i);
-    const tagName = await row.evaluate((el) => el.tagName.toLowerCase());
-    if (tagName === 'select') {
-      rowValues.push(await row.inputValue());
-    } else {
-      const href = await row.getAttribute('href');
-      const idMatch = href?.match(/\/systems\/system\/(\d+)\/change\//);
-      rowValues.push(idMatch ? idMatch[1] : null);
-    }
+  try {
+    return await page
+      .locator(`${realSourceFieldSelector('select', 'system')}, a[href^="/admin/systems/system/"][href$="/change/"]`)
+      .evaluateAll((elements) =>
+        elements.map((el) => {
+          if (el.tagName.toLowerCase() === 'select') return el.value;
+          const idMatch = el.getAttribute('href')?.match(/\/systems\/system\/(\d+)\/change\//);
+          return idMatch ? idMatch[1] : null;
+        }),
+      );
+  } catch {
+    return null;
   }
-  return rowValues;
 }
 
-async function deleteDataSourceForSystem(page, platformId, adminUrls, statusCallback) {
-  const log = (msg) => statusCallback?.(msg);
-  const systemCandidates = SYSTEM_LABEL_CANDIDATES[platformId];
-  if (!systemCandidates) {
-    throw new Error(`Brak mapowania System dla platformy "${platformId}" w PartnerTax admin.`);
+async function readSystemRowValues(page, { attempts = 10 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    const values = await getSystemRowValues(page);
+    if (values) return values;
+    await page.waitForTimeout(1000);
   }
-
-  const reckoningLabel = await openUnfinishedReckoning(page, adminUrls, statusCallback);
-  const acceptableValues = findAllOptionValues(await readTemplateOptions(page, 'system'), systemCandidates);
-
-  const rowValues = await getSystemRowValues(page);
-  const rowCount = rowValues.length;
-  const matchedIndex = rowValues.findIndex((value) => acceptableValues.includes(value));
-
-  if (matchedIndex === -1) {
-    const diagnostic = `${platformId}: brak w rozliczeniu "${reckoningLabel}" (szukane System=[${acceptableValues.join(', ')}], wierszy=${rowCount}, wartosci=[${rowValues.join(', ')}])`;
-    log(`Brak raportu do usuniecia dla systemu: ${platformId} (${diagnostic}).`);
-    return { deleted: false, diagnostic };
-  }
-
-  log(`Usuwam raport dla systemu: ${platformId}...`);
-  const deleteCheckbox = page.locator(realSourceFieldSelector('input[type="checkbox"]', 'DELETE')).nth(matchedIndex);
-  // Wiersze Data source sa zwiniete w sekcje (kazdy system to osobny naglowek typu
-  // "BOLT : 2026-08-20 - 2026-08-20" na zrzucie ekranu od klienta) - checkbox DELETE dla
-  // zwinietej sekcji jest w DOM, ale ma display:none (potwierdzone live testem: nawet
-  // check({force:true}) rzuca "Element is not visible" od razu, bo Playwright nie potrafi
-  // wyliczyc punktu klikniecia bez bounding boxa). Zamiast klikac mysza, ustawiamy
-  // .checked bezposrednio w DOM i wysylamy 'change'/'input' - dziala niezaleznie od tego,
-  // czy sekcja jest wizualnie rozwinieta, a formularz i tak wysyla stan checkboxa przy
-  // zapisie niezaleznie od jego widocznosci.
-  await deleteCheckbox.evaluate((el) => {
-    el.checked = true;
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await pause(page);
-
-  const isChecked = await deleteCheckbox.isChecked();
-  if (!isChecked) {
-    const diagnostic = `${platformId}: checkbox DELETE (wiersz ${matchedIndex}) nie zaznaczyl sie po check({force:true}) - mozliwe ze jest disabled.`;
-    log(`Nie udalo sie zaznaczyc DELETE dla systemu: ${platformId} (${diagnostic}).`);
-    return { deleted: false, diagnostic };
-  }
-
-  await clickSaveAndVerify(
-    page,
-    async () => (await getSystemRowValues(page)).length < rowCount,
-    { statusCallback },
-  );
-  await pause(page);
-  log(`Usunieto raport dla systemu: ${platformId}.`);
-  return { deleted: true, diagnostic: null };
+  throw new Error('Nie udalo sie odczytac wierszy Data source z formularza rozliczenia.');
 }
 
 /**
- * Loguje sie do PartnerTax admin i usuwa po jednym Data source dla Uber/Bolt/FreeNow
- * z pierwszego niezakonczonego rozliczenia (Finished = False) - nic innego (inne systemy
- * na liscie, np. archiwalne wpisy, pozostaja nietkniete). Kazde usuniecie to osobny
- * przejazd sciezki otworz rozliczenie -> zaznacz DELETE -> zapisz, bo formularz przeladowuje
- * sie po kazdym zapisie.
+ * Loguje sie do PartnerTax admin i usuwa WSZYSTKIE wiersze Data source dla
+ * Uber/Bolt/FreeNow/Bolt Food z pierwszego niezakonczonego rozliczenia (Finished =
+ * False) - nic innego (inne systemy na liscie, np. Ebi24/Circle K/NovaPartner, zostaja
+ * nietkniete).
+ *
+ * Wszystkie pasujace checkboxy DELETE sa zaznaczane naraz i formularz jest zapisywany
+ * RAZ ("Save and continue editing" - standardowy formset Django usuwa wtedy wszystkie
+ * zaznaczone wiersze). Wczesniej kazdy wiersz to byl osobny zapis + przeladowanie calego
+ * (duzego, ~30 wierszy) formularza rozliczenia - przy kilkudziesieciu kontach klienta
+ * trwalo to bardzo dlugo i bylo podatne na zawieszenie (patrz getSystemRowValues). Petla
+ * przebiegow to tylko zabezpieczenie: jesli po zapisie cos pasujacego jeszcze zostalo,
+ * kolejny przebieg to dokasuje.
  */
 async function deleteReportsFromPartnerTax({ context, account, statusCallback }) {
   const log = (msg) => statusCallback?.(msg);
@@ -409,13 +374,71 @@ async function deleteReportsFromPartnerTax({ context, account, statusCallback })
 
   let deletedCount = 0;
   const diagnostics = [];
-  for (const platformId of Object.keys(SYSTEM_LABEL_CANDIDATES)) {
-    const result = await deleteDataSourceForSystem(page, platformId, adminUrls, statusCallback);
-    if (result.deleted) {
-      deletedCount += 1;
-    } else {
-      diagnostics.push(result.diagnostic);
+  const MAX_PASSES = 3;
+  for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
+    const reckoningLabel = await openUnfinishedReckoning(page, adminUrls, statusCallback);
+    const systemOptions = await readTemplateOptions(page, 'system');
+    const rowValues = await readSystemRowValues(page);
+
+    const matchedIndices = [];
+    for (const [platformId, systemCandidates] of Object.entries(SYSTEM_LABEL_CANDIDATES)) {
+      const acceptableValues = findAllOptionValues(systemOptions, systemCandidates);
+      const indices = rowValues
+        .map((value, index) => (acceptableValues.includes(value) ? index : -1))
+        .filter((index) => index !== -1);
+      if (indices.length === 0) {
+        if (pass === 1) {
+          const diagnostic = `${platformId}: brak w rozliczeniu "${reckoningLabel}" (szukane System=[${acceptableValues.join(', ')}], wierszy=${rowValues.length}, wartosci=[${rowValues.join(', ')}])`;
+          log(`Brak raportu do usuniecia dla systemu: ${platformId} (${diagnostic}).`);
+          diagnostics.push(diagnostic);
+        }
+        continue;
+      }
+      log(`Do usuniecia: ${platformId} - ${indices.length} wiersz(y).`);
+      matchedIndices.push(...indices);
     }
+
+    if (matchedIndices.length === 0) break;
+
+    // Wiersze Data source sa zwiniete w sekcje (kazdy system to osobny naglowek typu
+    // "BOLT : 2026-08-20 - 2026-08-20") - checkbox DELETE zwinietej sekcji ma display:none,
+    // wiec Playwright nie potrafi go kliknac (potwierdzone live testem). Ustawiamy .checked
+    // bezposrednio w DOM i wysylamy 'change'/'input' - formularz wysyla stan checkboxa przy
+    // zapisie niezaleznie od jego widocznosci.
+    log(`Zaznaczam DELETE na ${matchedIndices.length} wierszach...`);
+    const checkedCount = await page
+      .locator(realSourceFieldSelector('input[type="checkbox"]', 'DELETE'))
+      .evaluateAll((checkboxes, indices) => {
+        let count = 0;
+        for (const index of indices) {
+          const el = checkboxes[index];
+          if (!el) continue;
+          el.checked = true;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          if (el.checked) count += 1;
+        }
+        return count;
+      }, matchedIndices);
+    await pause(page);
+
+    if (checkedCount !== matchedIndices.length) {
+      throw new Error(`Zaznaczono DELETE tylko na ${checkedCount} z ${matchedIndices.length} wierszy - nic nie zostalo zapisane (mozliwe, ze checkboxy sa disabled).`);
+    }
+
+    log(`Zapisuje rozliczenie (usuwanie ${matchedIndices.length} raportow naraz)...`);
+    const expectedMaxRows = rowValues.length - matchedIndices.length;
+    await clickSaveAndVerify(
+      page,
+      async () => {
+        const values = await getSystemRowValues(page);
+        return values !== null && values.length <= expectedMaxRows;
+      },
+      { statusCallback },
+    );
+    await pause(page);
+    deletedCount += matchedIndices.length;
+    log(`Usunieto ${matchedIndices.length} raportow.`);
   }
 
   log(`Usunieto raportow: ${deletedCount}.`);

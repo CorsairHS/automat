@@ -1,7 +1,9 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell } = require('electron');
+const archiver = require('archiver');
 const credentialStore = require('./credentialStore');
+const { sortBySettlementOrder } = require('./settlementOrder');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
 const { validateDownloadedReport, ReportValidationError } = require('./automation/reportValidator');
@@ -90,6 +92,40 @@ let mainWindow;
 const lastDownloads = new Map();
 const lastGwarantDownloads = new Map();
 
+function sanitizeFileNamePart(value) {
+  return String(value || '').trim().replace(/[\\/:*?"<>|]+/g, '_');
+}
+
+// Klient poprosil, zeby po pobraniu plik od razu niosl w nazwie miasto, firme i
+// platforme (do tej pory plik mial dokladnie taka nazwe, jaka podpowiadal serwer
+// platformy, np. "20260914-20260921-payments_driver-UNITY_DRIVE...csv" - bez kontekstu
+// konta widocznego samym plikiem, np. przy przegladaniu folderu pobranych plikow albo
+// ZIP-a z nimi). Zmiana nazwy dzieje sie PO validateDownloadedReport (patrz sync:run) -
+// walidator parsuje tydzien/firme z ORYGINALNEJ nazwy nadanej przez serwer platformy, wiec
+// nie moze dzialac na juz zmienionej nazwie. Oryginalna nazwa zostaje na koncu (nie jest
+// tracona) - zawiera dokladny zakres dat i typ raportu, przydatne przy weryfikacji.
+function renameDownloadedFile(filePath, { city, company, platformLabel }) {
+  const dir = path.dirname(filePath);
+  const ext = path.extname(filePath);
+  const originalBase = path.basename(filePath, ext);
+  const prefix = [city, company, platformLabel].map(sanitizeFileNamePart).filter(Boolean).join(' - ');
+  if (!prefix) return filePath;
+
+  const newPath = path.join(dir, `${prefix} - ${originalBase}${ext}`);
+  if (newPath === filePath) return filePath;
+  fs.renameSync(filePath, newPath);
+  return newPath;
+}
+
+// Kolejnosc wgrywania plikow do PartnerTax admin decyduje o kolejnosci wierszy w
+// zapisanym rozliczeniu (kazdy plik to nowy "Add another Data source" na koncu
+// formularza) - klient chce dokladnie takiej kolejnosci jak w jego ostatnim zamknietym
+// rozliczeniu: firma -> miasto -> platforma (patrz settlementOrder.js), a nie w
+// kolejnosci zakonczenia pobran ani pogrupowane po platformie.
+function getOrderedDownloads(downloadsMap) {
+  return sortBySettlementOrder(Array.from(downloadsMap.values()));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 820,
@@ -161,6 +197,19 @@ ipcMain.handle('accounts:list', (_event, platformId, group) => {
   return accounts.map((account) => maskAccountForRenderer(platform, account));
 });
 
+// Kolejnosc kont z raportami (klucze "platformId:accountId") wg ostatniego zamknietego
+// rozliczenia klienta - renderer uklada wg niej "Kontrola pobran" i "Pobierz wszystkie".
+ipcMain.handle('accounts:reportOrder', (_event, group = 'default') => {
+  const items = [];
+  for (const platform of PLATFORMS) {
+    if (!platform.report) continue;
+    for (const account of credentialStore.listAccounts(platform.id, group)) {
+      items.push({ platformId: platform.id, accountId: account.accountId, city: account.city, company: account.company, label: account.label });
+    }
+  }
+  return sortBySettlementOrder(items).map((item) => `${item.platformId}:${item.accountId}`);
+});
+
 ipcMain.handle('accounts:save', (_event, platformId, account) => {
   const accountId = credentialStore.saveAccount(platformId, account);
   return { ok: true, accountId };
@@ -220,17 +269,19 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
     validateDownloadedReport({ platformId, account, filePath: result.filePath });
+    const platformLabel = PLATFORMS.find((p) => p.id === platformId)?.label || platformId;
+    const filePath = renameDownloadedFile(result.filePath, { city: account.city, company: account.company, platformLabel });
     const targetMap = account.group === 'gwarant' ? lastGwarantDownloads : lastDownloads;
     targetMap.set(`${platformId}:${accountId}`, {
       platformId,
       accountId,
       city: account.city,
       company: account.company,
-      filePath: result.filePath,
+      filePath,
       downloadedAt: new Date().toISOString(),
     });
-    logger.info(`${logPrefix} sukces: ${result.filePath}`);
-    return { ok: true, filePath: result.filePath };
+    logger.info(`${logPrefix} sukces: ${filePath}`);
+    return { ok: true, filePath };
   } catch (error) {
     logger.error(`${logPrefix} blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
@@ -248,13 +299,65 @@ ipcMain.handle('downloads:statusGwarant', () => {
   return Array.from(lastGwarantDownloads.values());
 });
 
+// Klient chce miec mozliwosc sprawdzic pobrane pliki przed/po wgraniu do PartnerTax -
+// dwa sposoby: podglad "na zywo" w Finderze/Eksploratorze (folder z biezacej sesji, patrz
+// downloads:showFolder) albo jeden plik ZIP do pobrania/przeslania dalej (patrz
+// downloads:exportZip). Oba dzialaja na tych samych plikach co checklista "Kontrola
+// pobran" (lastDownloads) - juz przemianowanych (miasto/firma/platforma, patrz
+// renameDownloadedFile), w tej samej kolejnosci co wgrywanie (getOrderedDownloads).
+ipcMain.handle('downloads:showFolder', () => {
+  const downloadsRoot = path.join(app.getPath('userData'), 'downloads');
+  fs.mkdirSync(downloadsRoot, { recursive: true });
+  shell.openPath(downloadsRoot);
+  return { ok: true };
+});
+
+ipcMain.handle('downloads:exportZip', async () => {
+  const downloads = getOrderedDownloads(lastDownloads);
+  if (downloads.length === 0) {
+    return { ok: false, error: 'Brak pobranych plikow do spakowania - najpierw pobierz raporty.' };
+  }
+
+  const defaultName = `PartnerTax-pobrane-${new Date().toISOString().slice(0, 10)}.zip`;
+  const dialogResult = await dialog.showSaveDialog(mainWindow, {
+    title: 'Eksportuj pobrane pliki do ZIP',
+    defaultPath: path.join(app.getPath('downloads'), defaultName),
+    filters: [{ name: 'Archiwum ZIP', extensions: ['zip'] }],
+  });
+  if (dialogResult.canceled || !dialogResult.filePath) {
+    return { ok: false, canceled: true };
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(dialogResult.filePath);
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      output.on('close', resolve);
+      archive.on('error', reject);
+      archive.pipe(output);
+      for (const entry of downloads) {
+        // Nazwy w ZIP-ie ("Wroclaw - Unity Drive - Bolt - ...csv") juz zawieraja
+        // miasto/firme/platforme dzieki renameDownloadedFile - flat (bez podfolderow per
+        // konto) wystarczy do przejrzenia zawartosci.
+        archive.file(entry.filePath, { name: path.basename(entry.filePath) });
+      }
+      archive.finalize();
+    });
+    shell.showItemInFolder(dialogResult.filePath);
+    return { ok: true, filePath: dialogResult.filePath, count: downloads.length };
+  } catch (error) {
+    logger.error(`[downloads:exportZip] blad: ${error.stack || error.message}`);
+    return { ok: false, error: error.message };
+  }
+});
+
 ipcMain.handle('upload:run', async (event) => {
   const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
   if (!partnertaxAccount) {
     return { ok: false, error: 'Brak skonfigurowanego konta PartnerTax admin.' };
   }
 
-  const uploads = Array.from(lastDownloads.values());
+  const uploads = getOrderedDownloads(lastDownloads);
   if (uploads.length === 0) {
     return { ok: false, error: 'Brak pobranych plikow do wgrania - najpierw pobierz raporty (Uber/Bolt/FreeNow).' };
   }

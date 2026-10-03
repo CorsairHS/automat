@@ -88,29 +88,34 @@ test.describe('PartnerTax admin resilience', () => {
     expect(mock.state.savedSources).toEqual([{ system: '17', city: '7', company: '5', file: '1' }]);
   });
 
-  test('usuwanie po aliasie systemu: deleteReportsFromPartnerTax wisi mimo poprawnego usuniecia po stronie serwera', async () => {
+  test('usuwanie po aliasie systemu: deleteReportsFromPartnerTax konczy sie (nie wisi) i usuwa wiersz', async () => {
+    test.setTimeout(60_000);
     const context = await browser.newContext();
     const mock = await installPartnerTaxMock(context, { preSeedSavedSources: [{ system: '65' }] });
-    const account = makeAccount();
 
-    let settled = false;
-    deleteReportsFromPartnerTax({ context, account, statusCallback: () => {} })
-      .then(() => { settled = true; })
-      .catch(() => { settled = true; });
+    // Wczesniej (count() + nth(i).evaluate() w getSystemRowValues) obietnica wisiala w
+    // nieskonczonosc po zapisie - zglaszane przez klienta jako zawieszanie sie usuwania.
+    const result = await deleteReportsFromPartnerTax({ context, account: makeAccount(), statusCallback: () => {} });
 
-    await new Promise((resolve) => setTimeout(resolve, 10_000));
-
-    // Playwright Test nie ma domyslnego limitu czasu akcji (patrz spec) - .evaluate()
-    // w getSystemRowValues wisi wiec w nieskonczonosc, nie rzuca czystego bledu w
-    // rozsadnym czasie. Zamiast lapac blad, dowodzimy ze obietnica NADAL nie jest
-    // rozstrzygnieta po 10s (komfortowy margines ponad ~1-2s normalnej sciezki sukcesu).
-    expect(settled).toBe(false);
-
-    // Mimo ze klient (Playwright) nadal czeka, serwer (mock) juz przetworzyl usuniecie -
-    // to dokladnie ten sam mechanizm co realnie zgloszony bug klienta ("wisial, a potem
-    // wywalal sie bledem mimo ze serwer zdazyl juz zapisac plik"), tylko przy usuwaniu
-    // zamiast dodawaniu.
+    expect(result.deletedCount).toBe(1);
     expect(mock.state.savedSources).toEqual([]);
+  });
+
+  test('usuwanie wielu wierszy: wszystko jednym zapisem, inne systemy nietkniete', async () => {
+    test.setTimeout(60_000);
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {
+      systems: [['17', 'Bolt'], ['32', 'Uber'], ['2', 'Freenow'], ['78', 'Bolt Food'], ['90', 'Circle K - faktura']],
+      preSeedSavedSources: [
+        { system: '17' }, { system: '2' }, { system: '32' }, { system: '17' },
+        { system: '78' }, { system: '90' }, { system: '17' }, { system: '32' },
+      ],
+    });
+
+    const result = await deleteReportsFromPartnerTax({ context, account: makeAccount(), statusCallback: () => {} });
+
+    expect(result.deletedCount).toBe(7);
+    expect(mock.state.savedSources).toEqual([{ system: '90' }]);
   });
 
   test('inny partner: inny adres panelu i inne ID opcji', async () => {

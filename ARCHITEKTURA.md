@@ -169,3 +169,40 @@ UWAGA: typy nieplatnicze ("Przejazdy", "Status kierowcy", ...) sa dostepne na zy
 klienta, ale nie byly sprawdzone end-to-end - maja inny uklad kolumn, wiec dalszy import do
 PartnerTax moze ich nie przyjac. Pewne angielskie etykiety to tylko "Payments Driver" i
 "Driver Activity" (widziane na zywo); reszta to najlepsze znane odpowiedniki.
+
+## ✅ Cztery poprawki zglossone przez klienta: usuwanie, kolejnosc wgrywania, nazwy plikow, podglad ZIP (2026-09-23)
+
+Klient zglosil cztery odrebne uwagi na raz. Wszystkie cztery naprawione/dodane:
+
+1. **Usuwanie z admina "zawieszalo sie", dalo sie usunac tylko po kilka plikow na raz.**
+   Dwie przyczyny w `deleteReportsFromPartnerTax` (`src/main/automation/platforms/partnertax.js`):
+   (a) usuwany byl tylko PIERWSZY pasujacy wiersz na platforme na jedno klikniecie (max 4),
+   a kazde klikniecie od nowa uruchamialo przegladarke i logowanie; (b) prawdziwe
+   zawieszenie: `getSystemRowValues` robil `count()` i potem `nth(i).evaluate()` na kazdy
+   wiersz - gdy strona przeladowala sie po zapisie (wierszy mniej), `nth(i)` czekal w
+   nieskonczonosc na nieistniejacy element. Naprawa (2026-10-03): odczyt wierszy jednym
+   atomowym `evaluateAll`; WSZYSTKIE pasujace checkboxy DELETE (Uber/Bolt/FreeNow/Bolt Food)
+   zaznaczane naraz i formularz zapisywany RAZ (zamiast ~30 zapisow ciezkiej strony);
+   blad walidacji Django (`.errornote`) przerywa od razu zamiast czekac 15 min.
+2. **Kolejnosc plikow ma pasowac do ostatniego zamknietego rozliczenia klienta.** Na
+   zrzutach zamknietego rozliczenia wiersze NIE sa pogrupowane po platformie, tylko
+   firma -> miasto -> platforma (DA INVESTMENT przed UNITY DRIVE; miasta: Wroclaw,
+   Warszawa, Legnica, Krakow, Bialystok, Walbrzych/Jelenia Gora, Lubin, Augustow, Poznan,
+   Leszno; w miescie: Bolt Food, Bolt, FreeNow, Uber). Ta kolejnosc siedzi w
+   `src/main/settlementOrder.js` (dopasowanie po tekscie bez polskich znakow; nieznane
+   firmy/miasta na koncu) i obowiazuje w "Kontrola pobran", "Pobierz wszystkie", ZIP-ie
+   i przy wgrywaniu (`getOrderedDownloads`). Nowe miasto/firma = jedna linijka w tym pliku.
+3. **Nazwa pobranego pliku ma zawierac miasto, firme i platforme.** Do tej pory plik mial
+   dokladnie taka nazwe, jaka podpowiadal serwer platformy (np.
+   `20260914-20260921-payments_driver-UNITY_DRIVE...csv`) - bez kontekstu konta widocznego
+   samym plikiem. `renameDownloadedFile()` (`src/main/main.js`, wolane w `sync:run` PO
+   `validateDownloadedReport` - walidator musi dostac oryginalna nazwe z serwera, zeby
+   sparsowac tydzien/firme) dopisuje prefiks `Miasto - Firma - Platforma - ` i zostawia
+   oryginalna nazwe na koncu (nie traci zakresu dat/typu raportu, przydatnych przy
+   weryfikacji).
+4. **Latwy podglad pobranych plikow przed/po wgraniu.** Dodano w sekcji "Kontrola pobran":
+   przycisk "Pokaz folder pobranych plikow" (otwiera folder w Finderze/Eksploratorze,
+   `shell.openPath`) oraz "Eksportuj ZIP" (pakuje WSZYSTKIE aktualnie pobrane pliki - ta
+   sama lista i kolejnosc co przy wgrywaniu - w jedno archiwum przez natywny dialog
+   "Zapisz jako", biblioteka `archiver`). Po zapisie ZIP jest automatycznie pokazywany w
+   Finderze (`shell.showItemInFolder`).
