@@ -1,0 +1,17 @@
+INSTALACJA PartnerTax Automat NA MACU
+
+1. Zamknij PartnerTax Automat, jesli jest otwarty (Cmd + Q).
+
+2. Otworz plik .dmg i przeciagnij "PartnerTax Automat.app" do folderu Programy (Applications).
+   Jesli zapyta, wybierz "Zastap". Konta i hasla zostaja - nie sa zapisane w samej aplikacji.
+
+3. Otworz Terminal (Cmd + Spacja, wpisz "Terminal", Enter), wklej ta jedna linie i zatwierdz Enterem:
+
+xattr -cr "/Applications/PartnerTax Automat.app"
+
+4. Otworz "PartnerTax Automat" z folderu Programy.
+
+Kolejne wersje instaluja sie same (zakladka Aktualizacje) - nie trzeba powtarzac tych krokow.
+
+WAZNE: NIE uruchamiaj komendy "codesign --force --deep --sign - ..." z poprzedniej wersji tej
+instrukcji. Nadpisuje ona podpis aplikacji i automatyczne aktualizacje przestaja dzialac.

@@ -206,3 +206,31 @@ Klient zglosil cztery odrebne uwagi na raz. Wszystkie cztery naprawione/dodane:
    sama lista i kolejnosc co przy wgrywaniu - w jedno archiwum przez natywny dialog
    "Zapisz jako", biblioteka `archiver`). Po zapisie ZIP jest automatycznie pokazywany w
    Finderze (`shell.showItemInFolder`).
+
+## ✅ Mac: podpis wlasnym certyfikatem - naprawa auto-aktualizacji (2026-10-05)
+
+Klient (1.0.15) dostawal przy aktualizacji: `Code signature at URL .../ShipIt/update.../PartnerTax
+Automat.app/ did not pass validation`. Squirrel/ShipIt przyjmuje nowa wersje tylko, gdy spelnia
+"designated requirement" zainstalowanej. Podpis ad-hoc (`codesign --sign -`, dotychczasowy
+postbuild i krok w instrukcji instalacji) daje wymaganie `cdhash H"..."` - skrot plikow, ktorego
+ZADNA nowa wersja nie spelni. Auto-aktualizacja na Macu nie mogla wiec nigdy zadzialac.
+
+Naprawa: wlasny certyfikat self-signed "PartnerTax Automat Signing" (tworzony raz przez
+`npm run setup:mac-signing` -> `scripts/setup-mac-signing.sh`, osobny pęk kluczy
+`~/Library/Keychains/partnertax-signing.keychain-db`, kopia w `~/.partnertax-signing`). Hook
+`afterSign` (`scripts/mac-after-sign.js`) podpisuje nim aplikacje PRZED spakowaniem do DMG/ZIP
+(ZIP to plik aktualizacji). Wymaganie brzmi teraz `identifier "pl.partnertax.automat" and
+certificate root = H"<certyfikat>"` - spelnia je kazda kolejna wersja podpisana tym certyfikatem
+(sprawdzone `codesign --verify -R=<wymaganie starej> <nowa>` na dwoch roznych buildach).
+`mac.identity: null` wylacza wlasne podpisywanie electron-buildera (szuka tylko zaufanych
+certyfikatow Apple); usuniete postbuild z `codesign --sign -`.
+
+- Bez certyfikatu build Maca sie nie udaje (celowo - wersja ad-hoc zepsulaby aktualizacje).
+- `~/.partnertax-signing` to jedyna kopia klucza: utrata = kazdy klient musi raz zainstalowac
+  recznie. NIE do repozytorium.
+- Klient wciaz musi raz zainstalowac recznie pierwsza wersje podpisana certyfikatem (1.0.19) -
+  jego 1.0.15 ma wymaganie cdhash. W instrukcji (`INSTALACJA-MAC.txt`) zostal tylko
+  `xattr -cr` (certyfikat nie jest zaufany przez Gatekeepera); krok `codesign --sign -` usuniety,
+  bo nadpisywal podpis.
+- Niezweryfikowane end-to-end: pelna aktualizacja przez GitHub Releases (1.0.19 -> 1.0.20).
+  Docelowo i tak lepszy jest Apple Developer ID + notaryzacja (bez kroku `xattr`).
