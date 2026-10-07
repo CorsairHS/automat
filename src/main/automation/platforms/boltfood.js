@@ -51,11 +51,25 @@ async function syncBoltFoodAccount({ context, account, downloadDir, statusCallba
   // w tym oknie, zanim przekierowanie zdazy nastapic - zaobserwowane na zywo: automat
   // pomijal cale logowanie i od razu czekal (bezskutecznie) na tabele raportow, podczas
   // gdy przegladarka byla w trakcie przekierowania na ekran logowania. Zamiast URL,
-  // sprawdzamy obecnosc linku "Raportowanie" w menu bocznym - jest widoczny na KAZDEJ
+  // sprawdzamy obecnosc pozycji raportow w menu bocznym - jest widoczna na KAZDEJ
   // stronie zalogowanego panelu (nie tylko na stronie raportow), wiec dziala niezaleznie
   // od tego, gdzie OAuth callback faktycznie wyladuje (patrz komentarz przy nawigacji
   // ponizej - w praktyce nie zawsze jest to strona docelowa z deep-linku).
-  const isLoggedIn = () => page.getByRole('link', { name: /raportowanie/i }).isVisible().catch(() => false);
+  //
+  // UWAGA (2026-10-07, po zgloszeniu z zywego uruchomienia): pozycja menu nazywa sie
+  // "Raporty", a "Raportowanie" to dopiero naglowek strony raportow. Selektor szukal
+  // wczesniej linku "Raportowanie", wiec po POPRAWNYM zalogowaniu nigdy nie wykrywal
+  // zalogowanej sesji - automat pokazywal partnerowi komunikat o mozliwym 2FA i czekal
+  // do konca limitu, mimo ze Bolt Food zadnego kodu nie wymagal. Dopasowujemy wiec
+  // dokladna nazwe pozycji menu w obu jezykach UI (pl/en), zakotwiczona tak, zeby nie
+  // zlapac naglowka ani zakladek typu "Harmonogram raportow".
+  const reportsNavName = /^\s*(raporty|raportowanie|reports|reporting)\s*$/i;
+  const isLoggedIn = () => page
+    .getByRole('link', { name: reportsNavName })
+    .or(page.getByRole('button', { name: reportsNavName }))
+    .first()
+    .isVisible()
+    .catch(() => false);
 
   log('Otwieram panel Bolt Food Fleet...');
   await page.goto(reportsUrl, { waitUntil: 'domcontentloaded' });
