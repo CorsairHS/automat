@@ -660,16 +660,19 @@ async function renderChecklistSection() {
     const controls = document.createElement('span');
     controls.className = 'run-controls';
     downloadAllControlsElement = controls;
-    if (bulkRun) runBtn.disabled = true;
+    if (bulkRun) {
+      runBtn.disabled = true;
+      if (bulkRun.section === 'default') controls.append(bulkRun.abortBtn, bulkRun.stopAllBtn);
+    }
 
     runBtn.onclick = () =>
       runAllDownloadsWithReview({
         items: reportAccountsCache,
+        section: 'default',
         getRunButton: () => downloadAllButton,
         getStatusEl: () => downloadAllStatusElement,
         getControlsEl: () => downloadAllControlsElement,
         toggleKey: ACCEPT_DOWNLOADS_KEY,
-        refresh: renderChecklistSection,
       });
 
     runRow.appendChild(runBtn);
@@ -732,9 +735,9 @@ async function askUntilSettled(item, panel) {
  * bledzie/przerwaniu ZAWSZE pytanie (reczny plik / ponow / pomin), przerwa 8-15 s miedzy
  * kontami, "Przerwij to konto" i "Zatrzymaj wszystko" przez caly czas.
  */
-async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, getControlsEl, toggleKey, refresh }) {
+async function runAllDownloadsWithReview({ items, section, getRunButton, getStatusEl, getControlsEl, toggleKey }) {
   if (items.length === 0 || bulkRun) return;
-  const run = { stopRequested: false, currentKey: null };
+  const run = { stopRequested: false, currentKey: null, section, abortBtn: null, stopAllBtn: null };
   bulkRun = run;
 
   const abortBtn = document.createElement('button');
@@ -756,15 +759,15 @@ async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, get
     run.stopRequested = true;
     stopAllBtn.disabled = true;
   };
+  // Przyciski trzymane na biegu: kazda przebudowa checklisty (takze po recznym pliku)
+  // dopina je do nowego kontenera (patrz renderChecklistSection/renderGwarantChecklist).
+  run.abortBtn = abortBtn;
+  run.stopAllBtn = stopAllBtn;
 
   const lockUi = () => {
     getRunButton()?.setAttribute('disabled', '');
     for (const btn of runButtons.values()) btn.disabled = true;
     getControlsEl()?.append(abortBtn, stopAllBtn);
-  };
-  const refreshAndLock = async () => {
-    await refresh();
-    lockUi();
   };
   const setStatus = (text) => {
     const el = getStatusEl();
@@ -795,7 +798,7 @@ async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, get
         let choice;
         if (result.ok) {
           failedKeys.delete(key);
-          await refreshAndLock();
+          await refreshChecklists();
           if (!readToggle(toggleKey)) break;
           choice = await askUntilSettled(item, {
             title: `Pobrano: ${accountName}`,
@@ -809,7 +812,7 @@ async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, get
           });
         } else {
           failedKeys.add(key);
-          await refreshAndLock();
+          await refreshChecklists();
           choice = await askUntilSettled(item, {
             title: result.aborted ? `Przerwano: ${accountName}` : `Blad: ${accountName}`,
             message: result.error,
@@ -822,7 +825,7 @@ async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, get
             ],
           });
         }
-        if (choice === 'retry') continue;
+        if (choice === 'retry' && !run.stopRequested) continue;
         if (choice === 'stop') run.stopRequested = true;
         break;
       }
@@ -832,7 +835,7 @@ async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, get
     bulkRun = null;
     abortBtn.remove();
     stopAllBtn.remove();
-    await refresh();
+    await refreshChecklists();
     for (const btn of runButtons.values()) btn.disabled = false;
   }
   setStatus(
@@ -921,16 +924,19 @@ async function renderGwarantChecklist() {
   const controls = document.createElement('span');
   controls.className = 'run-controls';
   gwarantDownloadAllControlsElement = controls;
-  if (bulkRun) runBtn.disabled = true;
+  if (bulkRun) {
+    runBtn.disabled = true;
+    if (bulkRun.section === 'gwarant') controls.append(bulkRun.abortBtn, bulkRun.stopAllBtn);
+  }
 
   runBtn.onclick = () =>
     runAllDownloadsWithReview({
       items: gwarantReportAccountsCache,
+      section: 'gwarant',
       getRunButton: () => gwarantDownloadAllButton,
       getStatusEl: () => gwarantDownloadAllStatusElement,
       getControlsEl: () => gwarantDownloadAllControlsElement,
       toggleKey: ACCEPT_DOWNLOADS_KEY,
-      refresh: refreshGwarantChecklist,
     });
 
   runRow.appendChild(runBtn);
@@ -1390,10 +1396,14 @@ function renderAccountCard(platform, account, options = {}) {
       // 2026-08-25, konto Warszawa: partner zmienil zakres na 20-25 sierpnia, ale automat
       // pobral raport za "tydzien biezacy" = 24-25 sierpnia, bo to byl ostatni zapisany
       // tryb). Zapisujemy wiec biezacy stan formularza tuz przed uruchomieniem.
-      await window.api.saveAccount(platform.id, collectAccountPayload());
-      const result = await window.api.runSync(platform.id, account.accountId);
-      runBtn.disabled = false;
-      abortBtn.hidden = true;
+      let result;
+      try {
+        await window.api.saveAccount(platform.id, collectAccountPayload());
+        result = await window.api.runSync(platform.id, account.accountId);
+      } finally {
+        runBtn.disabled = false;
+        abortBtn.hidden = true;
+      }
       statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
       const item = { platformId: platform.id, accountId: account.accountId, label: account.label, platformLabel: platform.label };
       if (result.ok) {
