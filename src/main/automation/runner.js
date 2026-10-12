@@ -45,10 +45,10 @@ async function runDownload(userDataRoot, platformId, account, { statusCallback }
  * na jednym, wspolnym koncie PartnerTax (multiAccount:false - patrz platforms.js).
  * uploads: [{ platformId, city, filePath }]
  */
-async function runUpload(userDataRoot, account, uploads, { statusCallback } = {}) {
+async function runUpload(userDataRoot, account, uploads, { statusCallback, shouldStop, confirmAfterEach } = {}) {
   const context = await launchPlatformContext(userDataRoot, 'partnertax', account.accountId, { statusCallback });
   try {
-    await uploadToPartnerTax({ context, account, uploads, statusCallback });
+    await uploadToPartnerTax({ context, account, uploads, statusCallback, shouldStop, confirmAfterEach });
   } finally {
     await context.close();
   }

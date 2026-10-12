@@ -2,7 +2,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { test, expect, chromium } = require('playwright/test');
-const { uploadToPartnerTax, deleteReportsFromPartnerTax } = require('../src/main/automation/platforms/partnertax');
+const { uploadToPartnerTax, deleteReportsFromPartnerTax, UploadStoppedError } = require('../src/main/automation/platforms/partnertax');
 const { installPartnerTaxMock } = require('./mocks/partnerTaxAdminMock');
 
 function makeAccount(overrides = {}) {
@@ -187,5 +187,51 @@ test.describe('PartnerTax admin resilience', () => {
       .toBe(true);
     // Wiersz Bolt Food usuwa dopiero wlasciwy krok boltfood (inne ID niz w Nova).
     await expect.poll(() => mock.state.savedSources, { timeout: 15_000 }).toEqual([]);
+  });
+
+  test('confirmAfterEach "stop" po 1. pliku: wgrany tylko 1, blad UploadStoppedError z succeededUploads', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {});
+    const uploads = [makeUpload({ platformId: 'bolt' }), makeUpload({ platformId: 'uber' })];
+    const asked = [];
+
+    let caughtError;
+    try {
+      await uploadToPartnerTax({
+        context, account: makeAccount(), uploads, statusCallback: () => {},
+        confirmAfterEach: async (upload, index, total) => { asked.push([upload.platformId, index, total]); return 'stop'; },
+      });
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeInstanceOf(UploadStoppedError);
+    expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt']);
+    expect(asked).toEqual([['bolt', 0, 2]]);
+    expect(mock.state.savedSources).toHaveLength(1);
+  });
+
+  test('confirmAfterEach "continue": wszystkie wgrane, brak pytania po ostatnim pliku', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {});
+    const uploads = [makeUpload({ platformId: 'bolt' }), makeUpload({ platformId: 'uber' })];
+    let askedCount = 0;
+
+    await uploadToPartnerTax({
+      context, account: makeAccount(), uploads, statusCallback: () => {},
+      confirmAfterEach: async () => { askedCount += 1; return 'continue'; },
+    });
+
+    expect(askedCount).toBe(1);
+    expect(mock.state.savedSources).toHaveLength(2);
+  });
+
+  test('shouldStop przed startem: nic nie wgrane', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {});
+    await expect(
+      uploadToPartnerTax({ context, account: makeAccount(), uploads: [makeUpload()], statusCallback: () => {}, shouldStop: () => true })
+    ).rejects.toBeInstanceOf(UploadStoppedError);
+    expect(mock.state.savedSources).toEqual([]);
   });
 });

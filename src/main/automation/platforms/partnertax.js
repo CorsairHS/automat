@@ -277,8 +277,17 @@ async function addDataSourceFile(page, { platformId, city, company, filePath }, 
  * = False) i wgrywa podana liste plikow zrodlowych - po jednym Data source per wpis,
  * zapisujac formularz po kazdym (wymog PartnerTax admin, patrz addDataSourceFile).
  * uploads: [{ platformId: 'bolt'|'uber'|'freenow', city: string, company: string, filePath: string }]
+ * shouldStop: sprawdzane tylko MIEDZY plikami (plik w trakcie zapisu zawsze dokonczony).
+ * confirmAfterEach: wolane po kazdym pliku oprocz ostatniego; 'stop' przerywa wgrywanie.
  */
-async function uploadToPartnerTax({ context, account, uploads, statusCallback }) {
+class UploadStoppedError extends Error {
+  constructor() {
+    super('Zatrzymano wgrywanie na zyczenie.');
+    this.name = 'UploadStoppedError';
+  }
+}
+
+async function uploadToPartnerTax({ context, account, uploads, statusCallback, shouldStop, confirmAfterEach }) {
   const log = (msg) => statusCallback?.(msg);
   const adminUrls = resolveAdminUrls(account);
   const page = await context.newPage();
@@ -295,9 +304,18 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback })
   // wszystko od nowa).
   const succeeded = [];
   try {
-    for (const upload of uploads) {
+    for (let index = 0; index < uploads.length; index += 1) {
+      // Zatrzymanie (przycisk "Zatrzymaj") sprawdzane tylko MIEDZY plikami - plik w trakcie
+      // zapisu zawsze jest dokonczony, nic nie zostaje zapisane w polowie.
+      if (shouldStop?.()) throw new UploadStoppedError();
+      const upload = uploads[index];
       await addDataSourceFile(page, upload, statusCallback);
       succeeded.push(upload);
+      // Akceptacja po kazdym pliku - po ostatnim nie ma juz czego akceptowac, wiec nie pytamy.
+      if (confirmAfterEach && index < uploads.length - 1) {
+        const decision = await confirmAfterEach(upload, index, uploads.length);
+        if (decision === 'stop') throw new UploadStoppedError();
+      }
     }
   } catch (error) {
     error.succeededUploads = succeeded;
@@ -448,6 +466,7 @@ async function deleteReportsFromPartnerTax({ context, account, statusCallback })
 
 module.exports = {
   uploadToPartnerTax,
+  UploadStoppedError,
   deleteReportsFromPartnerTax,
   SYSTEM_LABEL_CANDIDATES,
 };
