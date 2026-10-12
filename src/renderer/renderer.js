@@ -67,6 +67,7 @@ function applyStatusMessage(el, message) {
 const failedKeys = new Set();
 
 const ACCEPT_DOWNLOADS_KEY = 'acceptEachDownload';
+const ACCEPT_GWARANT_DOWNLOADS_KEY = 'acceptEachGwarantDownload';
 const ACCEPT_UPLOADS_KEY = 'acceptEachUpload';
 
 function readToggle(storageKey) {
@@ -87,7 +88,7 @@ function buildAcceptToggle(storageKey) {
     try {
       localStorage.setItem(storageKey, String(input.checked));
     } catch {
-      // Brak dostepu do localStorage - przelacznik dziala do konca sesji okna.
+      // Brak dostepu do localStorage - zostaje domyslna wartosc (WLACZONE).
     }
   };
   label.append(input, ' Akceptuj kazdy plik');
@@ -154,7 +155,14 @@ async function refreshChecklists() {
  * "Uzyj mimo to / Wybierz inny plik". Zwraca true, gdy plik zostal dodany.
  */
 async function attachManualFileFlow(item) {
-  let result = await window.api.attachManualFile(item.platformId, item.accountId, {});
+  const attach = async (options) => {
+    try {
+      return await window.api.attachManualFile(item.platformId, item.accountId, options);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  };
+  let result = await attach({});
   for (;;) {
     if (result.canceled) return false;
     if (result.ok) {
@@ -163,7 +171,7 @@ async function attachManualFileFlow(item) {
       return true;
     }
     if (!result.needsConfirm) {
-      await askDecision({ title: 'Nie udalo sie dodac pliku', message: result.error, tone: 'danger', actions: [{ id: 'ok', label: 'OK' }] });
+      await askDecision({ title: 'Nie udalo sie dodac pliku', message: result.error || 'Nieznany blad', tone: 'danger', actions: [{ id: 'ok', label: 'OK' }] });
       return false;
     }
     const choice = await askDecision({
@@ -177,9 +185,9 @@ async function attachManualFileFlow(item) {
       ],
     });
     if (choice === 'force') {
-      result = await window.api.attachManualFile(item.platformId, item.accountId, { filePath: result.filePath, force: true });
+      result = await attach({ filePath: result.filePath, force: true });
     } else if (choice === 'other') {
-      result = await window.api.attachManualFile(item.platformId, item.accountId, {});
+      result = await attach({});
     } else {
       return false;
     }
@@ -638,7 +646,18 @@ function buildChecklistRow(item, entry) {
   editBtn.type = 'button';
   editBtn.className = 'btn-secondary';
   editBtn.textContent = 'Wgraj wlasny plik';
-  editBtn.onclick = () => attachManualFileFlow(item);
+  editBtn.onclick = async () => {
+    if (bulkRun?.currentKey === key) {
+      await askDecision({
+        title: 'Konto jest pobierane',
+        message: "To konto jest wlasnie pobierane - poczekaj na wynik albo uzyj 'Przerwij to konto'.",
+        tone: 'warning',
+        actions: [{ id: 'ok', label: 'OK' }],
+      });
+      return;
+    }
+    await attachManualFileFlow(item);
+  };
   row.appendChild(editBtn);
 
   return row;
@@ -764,9 +783,12 @@ async function runAllDownloadsWithReview({ items, section, getRunButton, getStat
   abortBtn.disabled = true;
   abortBtn.onclick = () => {
     if (!run.currentKey) return;
-    const [platformId, accountId] = run.currentKey.split(':');
+    const key = run.currentKey;
+    const [platformId, accountId] = key.split(':');
     abortBtn.disabled = true;
-    window.api.abortSync(platformId, accountId);
+    window.api.abortSync(platformId, accountId)
+      .then((r) => { if (!r?.ok && run.currentKey === key) abortBtn.disabled = false; })
+      .catch(() => { if (run.currentKey === key) abortBtn.disabled = false; });
   };
   const stopAllBtn = document.createElement('button');
   stopAllBtn.type = 'button';
@@ -953,11 +975,11 @@ async function renderGwarantChecklist() {
       getRunButton: () => gwarantDownloadAllButton,
       getStatusEl: () => gwarantDownloadAllStatusElement,
       getControlsEl: () => gwarantDownloadAllControlsElement,
-      toggleKey: ACCEPT_DOWNLOADS_KEY,
+      toggleKey: ACCEPT_GWARANT_DOWNLOADS_KEY,
     });
 
   runRow.appendChild(runBtn);
-  runRow.appendChild(buildAcceptToggle(ACCEPT_DOWNLOADS_KEY));
+  runRow.appendChild(buildAcceptToggle(ACCEPT_GWARANT_DOWNLOADS_KEY));
   runRow.appendChild(controls);
   runRow.appendChild(statusSpan);
   section.appendChild(runRow);
@@ -1426,7 +1448,10 @@ function renderAccountCard(platform, account, options = {}) {
     abortBtn.className = 'btn-delete';
     abortBtn.textContent = 'Przerwij';
     abortBtn.hidden = true;
-    abortBtn.onclick = () => window.api.abortSync(platform.id, account.accountId);
+    // Przycisk nigdy nie jest blokowany - nieudane przerwanie zostawia go klikalnym.
+    abortBtn.onclick = () => {
+      Promise.resolve(window.api.abortSync(platform.id, account.accountId)).catch(() => {});
+    };
 
     runBtn.onclick = async () => {
       runBtn.disabled = true;
@@ -1445,6 +1470,8 @@ function renderAccountCard(platform, account, options = {}) {
       try {
         await window.api.saveAccount(platform.id, collectAccountPayload());
         result = await window.api.runSync(platform.id, account.accountId);
+      } catch (error) {
+        result = { ok: false, error: error.message };
       } finally {
         runBtn.disabled = false;
         abortBtn.hidden = true;
@@ -1459,7 +1486,7 @@ function renderAccountCard(platform, account, options = {}) {
       failedKeys.add(statusKey);
       await refreshChecklists();
       const choice = await askDecision({
-        title: result.aborted ? `Przerwano: ${platform.label} - ${account.label}` : `Blad: ${platform.label} - ${account.label}`,
+        title: result.aborted ? `Przerwano: ${platform.label} - ${account.label || account.accountId}` : `Blad: ${platform.label} - ${account.label || account.accountId}`,
         message: result.error,
         tone: 'danger',
         actions: [

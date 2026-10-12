@@ -395,6 +395,7 @@ ipcMain.handle('downloads:exportZip', async () => {
 let uploadControl = null;
 
 ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
+  if (uploadControl) return { ok: false, error: 'Wgrywanie juz trwa.' };
   const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
   if (!partnertaxAccount) {
     return { ok: false, error: 'Brak skonfigurowanego konta PartnerTax admin.' };
@@ -433,7 +434,12 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
       confirmAfterEach,
       shouldStop: () => control.stopRequested,
     });
-    lastDownloads.clear();
+    // Kasujemy tylko wgrane wpisy (plik nadal ten sam) - pliki dodane w trakcie wgrywania
+    // (reczny plik / "Pobierz teraz") zostaja na liscie.
+    for (const u of uploads) {
+      const key = `${u.platformId}:${u.accountId}`;
+      if (lastDownloads.get(key)?.filePath === u.filePath) lastDownloads.delete(key);
+    }
     logger.info(`[upload] sukces, wgrano: ${uploads.length}`);
     return { ok: true, count: uploads.length };
   } catch (error) {
@@ -441,7 +447,8 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
     // w PartnerTax - wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich
     // drugi raz (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
     for (const upload of error.succeededUploads || []) {
-      lastDownloads.delete(`${upload.platformId}:${upload.accountId}`);
+      const key = `${upload.platformId}:${upload.accountId}`;
+      if (lastDownloads.get(key)?.filePath === upload.filePath) lastDownloads.delete(key);
     }
     if (error instanceof UploadStoppedError) {
       const count = (error.succeededUploads || []).length;

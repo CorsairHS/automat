@@ -32,7 +32,7 @@ async function humanClick(locator, options = {}) {
  * sprawdza, czy pole faktycznie zawiera caly tekst. Wczesniej znaki szly przez
  * page.keyboard, czyli do elementu, ktory akurat mial fokus - gdy strona w trakcie
  * wpisywania przejela fokus (podpowiedz autouzupelniania Chrome, przerenderowanie
- * formularza), reszta znakow przepadala i do logowania szedl ucięty email/haslo
+ * formularza), reszta znakow przepadala i do logowania szedl uciety email/haslo
  * (klient, 2026-10-12: "unitydrivewrocla", "novapartner.warszawa@" w Bolt Food/FreeNow).
  * Przy niezgodnosci - wypelnienie pola bezposrednio przez Playwright (jak w
  * typeIntoLoginField w uber.js). Wartosci nie ujawniamy w bledzie (haslo!).
