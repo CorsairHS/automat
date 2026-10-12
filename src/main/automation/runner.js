@@ -6,6 +6,7 @@ const { syncFreenowAccount } = require('./platforms/freenow');
 const { syncBoltFoodAccount } = require('./platforms/boltfood');
 const { uploadToPartnerTax, deleteReportsFromPartnerTax } = require('./platforms/partnertax');
 const { getDownloadDir } = require('./downloadFiles');
+const { runAbortable } = require('./activeRuns');
 
 const SYNC_FUNCTIONS = {
   uber: syncUberAccount,
@@ -30,9 +31,12 @@ async function runDownload(userDataRoot, platformId, account, { statusCallback }
 
   const context = await launchPlatformContext(userDataRoot, platformId, account.accountId, { statusCallback });
   try {
-    return await syncFn({ context, account, downloadDir, statusCallback });
+    return await runAbortable(`${platformId}:${account.accountId}`, context, () =>
+      syncFn({ context, account, downloadDir, statusCallback })
+    );
   } finally {
-    await context.close();
+    // Po przerwaniu kontekst jest juz zamkniety (abortRun) - ponowne close() rzuca.
+    await context.close().catch(() => {});
   }
 }
 
