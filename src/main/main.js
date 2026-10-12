@@ -7,6 +7,8 @@ const { sortBySettlementOrder } = require('./settlementOrder');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
 const { renameDownloadedFile, attachManualFile, getDownloadDir } = require('./automation/downloadFiles');
+const { abortRun, AbortedByUserError } = require('./automation/activeRuns');
+const { UploadStoppedError } = require('./automation/platforms/partnertax');
 const { validateDownloadedReport, ReportValidationError } = require('./automation/reportValidator');
 const { readSessionState, writeSessionState } = require('./automation/browserSession');
 const { autoUpdater } = require('electron-updater');
@@ -100,6 +102,23 @@ const lastGwarantDownloads = new Map();
 // kolejnosci zakonczenia pobran ani pogrupowane po platformie.
 function getOrderedDownloads(downloadsMap) {
   return sortBySettlementOrder(Array.from(downloadsMap.values()));
+}
+
+function recordDownload(platformId, account, filePath, { manual = false } = {}) {
+  const targetMap = account.group === 'gwarant' ? lastGwarantDownloads : lastDownloads;
+  targetMap.set(`${platformId}:${account.accountId}`, {
+    platformId,
+    accountId: account.accountId,
+    city: account.city,
+    company: account.company,
+    filePath,
+    downloadedAt: new Date().toISOString(),
+    manual,
+  });
+}
+
+function platformLabelOf(platformId) {
+  return PLATFORMS.find((p) => p.id === platformId)?.label || platformId;
 }
 
 function createWindow() {
@@ -245,23 +264,68 @@ ipcMain.handle('sync:run', async (event, platformId, accountId) => {
   try {
     const result = await runDownload(app.getPath('userData'), platformId, account, { statusCallback });
     validateDownloadedReport({ platformId, account, filePath: result.filePath });
-    const platformLabel = PLATFORMS.find((p) => p.id === platformId)?.label || platformId;
-    const filePath = renameDownloadedFile(result.filePath, { city: account.city, company: account.company, platformLabel });
-    const targetMap = account.group === 'gwarant' ? lastGwarantDownloads : lastDownloads;
-    targetMap.set(`${platformId}:${accountId}`, {
-      platformId,
-      accountId,
-      city: account.city,
-      company: account.company,
-      filePath,
-      downloadedAt: new Date().toISOString(),
-    });
+    const filePath = renameDownloadedFile(result.filePath, { city: account.city, company: account.company, platformLabel: platformLabelOf(platformId) });
+    recordDownload(platformId, account, filePath);
     logger.info(`${logPrefix} sukces: ${filePath}`);
     return { ok: true, filePath };
   } catch (error) {
+    if (error instanceof AbortedByUserError) {
+      logger.info(`${logPrefix} przerwano recznie`);
+      return { ok: false, aborted: true, error: error.message };
+    }
     logger.error(`${logPrefix} blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
   }
+});
+
+ipcMain.handle('sync:abort', async (_event, platformId, accountId) => {
+  const aborted = await abortRun(`${platformId}:${accountId}`);
+  if (aborted) logger.info(`[sync ${platformId}:${accountId}] przerwanie na zyczenie partnera`);
+  return { ok: aborted };
+});
+
+// Reczny plik dla konta (przycisk "Wgraj wlasny plik" w Kontroli pobran, panel bledu,
+// przerwanie konta) - patrz attachManualFile w downloadFiles.js.
+ipcMain.handle('downloads:attachManual', async (_event, platformId, accountId, { filePath, force = false } = {}) => {
+  const account = credentialStore.listAccounts(platformId).find((a) => a.accountId === accountId);
+  if (!account) return { ok: false, error: 'Nie znaleziono konta.' };
+
+  let sourcePath = filePath;
+  if (!sourcePath) {
+    const dialogResult = await dialog.showOpenDialog(mainWindow, {
+      title: `Wybierz plik raportu: ${platformLabelOf(platformId)} - ${account.label || accountId}`,
+      filters: [{ name: 'Raport CSV', extensions: ['csv'] }, { name: 'Wszystkie pliki', extensions: ['*'] }],
+      properties: ['openFile'],
+    });
+    if (dialogResult.canceled || dialogResult.filePaths.length === 0) return { ok: false, canceled: true };
+    sourcePath = dialogResult.filePaths[0];
+  }
+
+  try {
+    const result = attachManualFile({
+      platformId,
+      account,
+      sourcePath,
+      downloadDir: getDownloadDir(app.getPath('userData'), platformId, account),
+      force,
+    });
+    if (!result.ok) return result;
+    const finalPath = renameDownloadedFile(result.filePath, { city: account.city, company: account.company, platformLabel: platformLabelOf(platformId) });
+    recordDownload(platformId, account, finalPath, { manual: true });
+    logger.info(`[manual ${platformId}:${account.label || accountId}] dodano plik${force ? ' (mimo ostrzezenia)' : ''}: ${finalPath}`);
+    return { ok: true, filePath: finalPath };
+  } catch (error) {
+    logger.error(`[manual ${platformId}:${accountId}] blad: ${error.stack || error.message}`);
+    return { ok: false, error: error.message };
+  }
+});
+
+// Tylko pliki znane z listy pobran - renderer nie moze otworzyc dowolnej sciezki.
+ipcMain.handle('downloads:showFile', (_event, filePath) => {
+  const known = [...lastDownloads.values(), ...lastGwarantDownloads.values()].some((d) => d.filePath === filePath);
+  if (!known || !fs.existsSync(filePath)) return { ok: false, error: 'Plik nie jest juz dostepny.' };
+  shell.showItemInFolder(filePath);
+  return { ok: true };
 });
 
 // Warstwa kontrolna: pozwala rendererowi sprawdzic, ktore skonfigurowane konta maja juz
@@ -327,7 +391,10 @@ ipcMain.handle('downloads:exportZip', async () => {
   }
 });
 
-ipcMain.handle('upload:run', async (event) => {
+// Stan trwajacego wgrywania: flaga "Zatrzymaj" i ewentualne oczekujace pytanie o akceptacje.
+let uploadControl = null;
+
+ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
   const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
   if (!partnertaxAccount) {
     return { ok: false, error: 'Brak skonfigurowanego konta PartnerTax admin.' };
@@ -343,22 +410,67 @@ ipcMain.handle('upload:run', async (event) => {
     event.sender.send('upload:status', { message });
   };
 
-  logger.info(`[upload] start, plikow: ${uploads.length}`);
+  const control = { stopRequested: false, resolveConfirm: null };
+  uploadControl = control;
+  const confirmAfterEach = confirmEach
+    ? (upload, index, total) =>
+        new Promise((resolve) => {
+          control.resolveConfirm = resolve;
+          event.sender.send('upload:confirm', {
+            index,
+            total,
+            platformId: upload.platformId,
+            accountId: upload.accountId,
+            fileName: path.basename(upload.filePath),
+          });
+        })
+    : undefined;
+
+  logger.info(`[upload] start, plikow: ${uploads.length}${confirmEach ? ' (z akceptacja kazdego pliku)' : ''}`);
   try {
-    await runUpload(app.getPath('userData'), partnertaxAccount, uploads, { statusCallback });
+    await runUpload(app.getPath('userData'), partnertaxAccount, uploads, {
+      statusCallback,
+      confirmAfterEach,
+      shouldStop: () => control.stopRequested,
+    });
     lastDownloads.clear();
     logger.info(`[upload] sukces, wgrano: ${uploads.length}`);
     return { ok: true, count: uploads.length };
   } catch (error) {
-    logger.error(`[upload] blad: ${error.stack || error.message}`);
-    // Pliki, ktore zdazyly sie wgrac przed bledem, sa juz trwale zapisane w PartnerTax -
-    // wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich drugi raz
-    // (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
+    // Pliki, ktore zdazyly sie wgrac przed bledem lub zatrzymaniem, sa juz trwale zapisane
+    // w PartnerTax - wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich
+    // drugi raz (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
     for (const upload of error.succeededUploads || []) {
       lastDownloads.delete(`${upload.platformId}:${upload.accountId}`);
     }
+    if (error instanceof UploadStoppedError) {
+      const count = (error.succeededUploads || []).length;
+      logger.info(`[upload] zatrzymano na zyczenie, wgrano: ${count}`);
+      return { ok: false, stopped: true, count };
+    }
+    logger.error(`[upload] blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
+  } finally {
+    if (uploadControl === control) uploadControl = null;
   }
+});
+
+function settleUploadConfirm(decision) {
+  const resolve = uploadControl?.resolveConfirm;
+  if (uploadControl) uploadControl.resolveConfirm = null;
+  resolve?.(decision);
+}
+
+ipcMain.handle('upload:confirmReply', (_event, decision) => {
+  settleUploadConfirm(decision === 'stop' ? 'stop' : 'continue');
+  return { ok: true };
+});
+
+ipcMain.handle('upload:stop', () => {
+  if (!uploadControl) return { ok: false };
+  uploadControl.stopRequested = true;
+  settleUploadConfirm('stop');
+  return { ok: true };
 });
 
 // Jeden zbiorczy plik na wszystkie konta naraz (nie osobny plik/przycisk per konto) - patrz

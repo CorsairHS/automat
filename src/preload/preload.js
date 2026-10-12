@@ -19,7 +19,17 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sync:status', listener);
     return () => ipcRenderer.removeListener('sync:status', listener);
   },
-  runUpload: () => ipcRenderer.invoke('upload:run'),
+  runUpload: (options) => ipcRenderer.invoke('upload:run', options),
+  abortSync: (platformId, accountId) => ipcRenderer.invoke('sync:abort', platformId, accountId),
+  attachManualFile: (platformId, accountId, options) => ipcRenderer.invoke('downloads:attachManual', platformId, accountId, options),
+  showDownloadedFile: (filePath) => ipcRenderer.invoke('downloads:showFile', filePath),
+  onUploadConfirm: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('upload:confirm', listener);
+    return () => ipcRenderer.removeListener('upload:confirm', listener);
+  },
+  replyUploadConfirm: (decision) => ipcRenderer.invoke('upload:confirmReply', decision),
+  stopUpload: () => ipcRenderer.invoke('upload:stop'),
   getDownloadsStatus: () => ipcRenderer.invoke('downloads:status'),
   getGwarantDownloadsStatus: () => ipcRenderer.invoke('downloads:statusGwarant'),
   showDownloadsFolder: () => ipcRenderer.invoke('downloads:showFolder'),
