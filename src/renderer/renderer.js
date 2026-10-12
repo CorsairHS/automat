@@ -60,6 +60,97 @@ function applyStatusMessage(el, message) {
   el.classList.toggle('run-status--safe-to-help', isSafeToHelp);
 }
 
+// Konta, ktorych ostatnie pobranie w tej sesji sie nie udalo/zostalo przerwane - na
+// czerwono w Kontroli pobran, dopoki nie pojawi sie plik (pobrany albo reczny).
+const failedKeys = new Set();
+
+/**
+ * Panel decyzji nad cala aplikacja (klient, 2026-10-12: akceptacja kazdego pliku, pytanie
+ * o reczny plik po bledzie). Zwraca id wybranej akcji. Akcja z keepOpen (np. "Pokaz plik")
+ * wykonuje onClick i zostawia panel otwarty.
+ */
+function askDecision({ title, message, tone = 'info', actions, overlayClass = '' }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = `decision-overlay ${overlayClass}`.trim();
+    const box = document.createElement('div');
+    box.className = `decision-box decision-box--${tone}`;
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    const text = document.createElement('p');
+    text.className = 'decision-message';
+    text.textContent = message;
+
+    const row = document.createElement('div');
+    row.className = 'decision-actions';
+    for (const action of actions) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = action.className || 'btn-secondary';
+      btn.textContent = action.label;
+      btn.onclick = async () => {
+        if (action.keepOpen) {
+          await action.onClick?.();
+          return;
+        }
+        overlay.remove();
+        resolve(action.id);
+      };
+      row.appendChild(btn);
+    }
+
+    box.append(heading, text, row);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    row.querySelector('button')?.focus();
+  });
+}
+
+async function refreshChecklists() {
+  await renderChecklistSection();
+  await refreshGwarantChecklist();
+}
+
+/**
+ * Reczny plik dla konta: wybor pliku -> walidacja w main -> przy niezgodnosci pytanie
+ * "Uzyj mimo to / Wybierz inny plik". Zwraca true, gdy plik zostal dodany.
+ */
+async function attachManualFileFlow(item) {
+  let result = await window.api.attachManualFile(item.platformId, item.accountId, {});
+  for (;;) {
+    if (result.canceled) return false;
+    if (result.ok) {
+      failedKeys.delete(`${item.platformId}:${item.accountId}`);
+      await refreshChecklists();
+      return true;
+    }
+    if (!result.needsConfirm) {
+      await askDecision({ title: 'Nie udalo sie dodac pliku', message: result.error, tone: 'danger', actions: [{ id: 'ok', label: 'OK' }] });
+      return false;
+    }
+    const choice = await askDecision({
+      title: `Plik nie pasuje do konta ${item.platformLabel} - ${item.label || item.accountId}`,
+      message: result.warning,
+      tone: 'warning',
+      actions: [
+        { id: 'force', label: 'Uzyj mimo to', className: 'btn-run' },
+        { id: 'other', label: 'Wybierz inny plik' },
+        { id: 'cancel', label: 'Anuluj' },
+      ],
+    });
+    if (choice === 'force') {
+      result = await window.api.attachManualFile(item.platformId, item.accountId, { filePath: result.filePath, force: true });
+    } else if (choice === 'other') {
+      result = await window.api.attachManualFile(item.platformId, item.accountId, {});
+    } else {
+      return false;
+    }
+  }
+}
+
 window.api.onSyncStatus(({ platformId, accountId, message }) => {
   const el = statusElements.get(`${platformId}:${accountId}`);
   applyStatusMessage(el, message);

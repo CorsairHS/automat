@@ -452,6 +452,57 @@ button:disabled {
   background: var(--danger-tint-200);
 }
 
+/* Panel decyzji (akceptacja pliku, blad pobierania, ostrzezenie recznego pliku) */
+.decision-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--shadow-200);
+  backdrop-filter: blur(2px);
+}
+
+.decision-box {
+  width: min(560px, 100%);
+  padding: 20px 22px;
+  border: 1px solid var(--ui-border-color);
+  border-radius: var(--ui-modal-radius);
+  background: var(--surface-900);
+  box-shadow: 0 12px 32px var(--shadow-200);
+}
+
+.decision-box--warning { border-color: var(--primary-500); }
+.decision-box--danger { border-color: var(--danger-tint-200); }
+
+.decision-box h3 { margin: 0 0 8px; color: var(--text-140); }
+
+.decision-message {
+  margin: 0 0 16px;
+  color: var(--text-300);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.decision-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.checklist-item.failed { color: var(--text-danger); font-weight: 700; }
+
+.checklist-file-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.checklist-item .btn-secondary { margin-left: auto; padding: 4px 10px; font-size: 12px; }
+
 .card-actions {
   display: flex;
   flex-wrap: wrap;
