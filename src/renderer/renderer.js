@@ -195,6 +195,23 @@ window.api.onUploadStatus(({ message }) => {
   applyStatusMessage(uploadStatusElement, message);
 });
 
+// Akceptacja po kazdym wgranym pliku (przelacznik w sekcji wgrywania) - main czeka na
+// odpowiedz, okno admina zostaje otwarte, wiec partner moze sprawdzic wiersz rozliczenia.
+window.api.onUploadConfirm(async ({ index, total, platformId, accountId, fileName }) => {
+  const item = reportAccountsCache.find((a) => a.platformId === platformId && a.accountId === accountId);
+  const name = item ? `${item.platformLabel} - ${item.label || accountId}` : platformId;
+  const choice = await askDecision({
+    overlayClass: 'decision-overlay--upload',
+    title: `Wgrano ${index + 1}/${total}: ${name}`,
+    message: `${fileName}\n\nSprawdz wiersz w oknie PartnerTax admin i zdecyduj, czy wgrywac dalej.`,
+    actions: [
+      { id: 'continue', label: 'Dalej', className: 'btn-run' },
+      { id: 'stop', label: 'Zatrzymaj', className: 'btn-delete' },
+    ],
+  });
+  await window.api.replyUploadConfirm(choice);
+});
+
 window.api.onDeleteStatus(({ message }) => {
   applyStatusMessage(deleteStatusElement, message);
 });
@@ -1008,15 +1025,43 @@ function renderUploadSection() {
   statusSpan.className = 'run-status';
   uploadStatusElement = statusSpan;
 
+  const stopBtn = document.createElement('button');
+  stopBtn.type = 'button';
+  stopBtn.className = 'btn-delete';
+  stopBtn.textContent = 'Zatrzymaj';
+  stopBtn.hidden = true;
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true;
+    statusSpan.textContent = 'Zatrzymuje po biezacym pliku...';
+    await window.api.stopUpload();
+  };
+
   runBtn.onclick = async () => {
     runBtn.disabled = true;
+    stopBtn.hidden = false;
+    stopBtn.disabled = false;
     statusSpan.textContent = 'Uruchamiam przegladarke...';
-    const result = await window.api.runUpload();
-    runBtn.disabled = false;
-    statusSpan.textContent = result.ok ? `Gotowe: wgrano ${result.count} plik(ow).` : `Blad: ${result.error}`;
+    let result;
+    try {
+      result = await window.api.runUpload({ confirmEach: readToggle(ACCEPT_UPLOADS_KEY) });
+    } catch (err) {
+      result = { ok: false, error: err && err.message ? err.message : String(err) };
+    } finally {
+      runBtn.disabled = false;
+      stopBtn.hidden = true;
+      // Panel akceptacji, ktory moglby zostac otwarty po "Zatrzymaj" z zewnatrz, jest juz
+      // nieaktualny.
+      document.querySelectorAll('.decision-overlay--upload').forEach((el) => el.remove());
+    }
+    if (result.ok) statusSpan.textContent = `Gotowe: wgrano ${result.count} plik(ow).`;
+    else if (result.stopped) statusSpan.textContent = `Zatrzymano: wgrano ${result.count} plik(ow). Pozostale zostaja na liscie - "Wgraj do PartnerTax" dokonczy reszte.`;
+    else statusSpan.textContent = `Blad: ${result.error}`;
+    await renderChecklistSection();
   };
 
   runRow.appendChild(runBtn);
+  runRow.appendChild(buildAcceptToggle(ACCEPT_UPLOADS_KEY));
+  runRow.appendChild(stopBtn);
   runRow.appendChild(statusSpan);
   section.appendChild(runRow);
 
