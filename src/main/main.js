@@ -6,6 +6,7 @@ const credentialStore = require('./credentialStore');
 const { sortBySettlementOrder } = require('./settlementOrder');
 const { PLATFORMS, PERIOD_MODES } = require('./platforms');
 const { runDownload, runUpload, runDeleteReports } = require('./automation/runner');
+const { renameDownloadedFile, attachManualFile, getDownloadDir } = require('./automation/downloadFiles');
 const { validateDownloadedReport, ReportValidationError } = require('./automation/reportValidator');
 const { readSessionState, writeSessionState } = require('./automation/browserSession');
 const { autoUpdater } = require('electron-updater');
@@ -91,31 +92,6 @@ let mainWindow;
 // PartnerTax - Gwarant ma byc calkowicie niezaleznym obiegiem.
 const lastDownloads = new Map();
 const lastGwarantDownloads = new Map();
-
-function sanitizeFileNamePart(value) {
-  return String(value || '').trim().replace(/[\\/:*?"<>|]+/g, '_');
-}
-
-// Klient poprosil, zeby po pobraniu plik od razu niosl w nazwie miasto, firme i
-// platforme (do tej pory plik mial dokladnie taka nazwe, jaka podpowiadal serwer
-// platformy, np. "20260914-20260921-payments_driver-UNITY_DRIVE...csv" - bez kontekstu
-// konta widocznego samym plikiem, np. przy przegladaniu folderu pobranych plikow albo
-// ZIP-a z nimi). Zmiana nazwy dzieje sie PO validateDownloadedReport (patrz sync:run) -
-// walidator parsuje tydzien/firme z ORYGINALNEJ nazwy nadanej przez serwer platformy, wiec
-// nie moze dzialac na juz zmienionej nazwie. Oryginalna nazwa zostaje na koncu (nie jest
-// tracona) - zawiera dokladny zakres dat i typ raportu, przydatne przy weryfikacji.
-function renameDownloadedFile(filePath, { city, company, platformLabel }) {
-  const dir = path.dirname(filePath);
-  const ext = path.extname(filePath);
-  const originalBase = path.basename(filePath, ext);
-  const prefix = [city, company, platformLabel].map(sanitizeFileNamePart).filter(Boolean).join(' - ');
-  if (!prefix) return filePath;
-
-  const newPath = path.join(dir, `${prefix} - ${originalBase}${ext}`);
-  if (newPath === filePath) return filePath;
-  fs.renameSync(filePath, newPath);
-  return newPath;
-}
 
 // Kolejnosc wgrywania plikow do PartnerTax admin decyduje o kolejnosci wierszy w
 // zapisanym rozliczeniu (kazdy plik to nowy "Add another Data source" na koncu

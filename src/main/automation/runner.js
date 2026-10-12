@@ -1,4 +1,3 @@
-const path = require('path');
 const fs = require('fs');
 const { launchPlatformContext } = require('./browserSession');
 const { syncUberAccount } = require('./platforms/uber');
@@ -6,6 +5,7 @@ const { syncBoltAccount } = require('./platforms/bolt');
 const { syncFreenowAccount } = require('./platforms/freenow');
 const { syncBoltFoodAccount } = require('./platforms/boltfood');
 const { uploadToPartnerTax, deleteReportsFromPartnerTax } = require('./platforms/partnertax');
+const { getDownloadDir } = require('./downloadFiles');
 
 const SYNC_FUNCTIONS = {
   uber: syncUberAccount,
@@ -13,10 +13,6 @@ const SYNC_FUNCTIONS = {
   freenow: syncFreenowAccount,
   boltfood: syncBoltFoodAccount,
 };
-
-function sanitizeFolderName(name) {
-  return name.replace(/[^a-z0-9\-_]+/gi, '_');
-}
 
 /**
  * Uruchamia pobieranie raportu dla jednego konta. Otwiera widoczne okno przegladarki
@@ -29,7 +25,7 @@ async function runDownload(userDataRoot, platformId, account, { statusCallback }
     throw new Error(`Pobieranie nie jest obslugiwane dla platformy: ${platformId}`);
   }
 
-  const downloadDir = path.join(userDataRoot, 'downloads', platformId, sanitizeFolderName(account.label || account.accountId));
+  const downloadDir = getDownloadDir(userDataRoot, platformId, account);
   fs.mkdirSync(downloadDir, { recursive: true });
 
   const context = await launchPlatformContext(userDataRoot, platformId, account.accountId, { statusCallback });
