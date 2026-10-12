@@ -546,6 +546,52 @@ function buildDownloadsCheckRow(downloadsCount) {
   return row;
 }
 
+/**
+ * Wiersz Kontroli pobran (wspolny dla domyslnej i Gwaranta). Nazwa pliku jest klikalna -
+ * pokazuje plik w Finderze/Eksploratorze (klient chce moc wrocic do dowolnego pliku i go
+ * sprawdzic); "Wgraj wlasny plik" podmienia/dodaje plik tego konta recznie.
+ */
+function buildChecklistRow(item, entry) {
+  const key = `${item.platformId}:${item.accountId}`;
+  const row = document.createElement('div');
+  row.className = 'checklist-item' + (entry ? ' checked' : '') + (!entry && failedKeys.has(key) ? ' failed' : '');
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = Boolean(entry);
+  checkbox.disabled = true;
+  row.appendChild(checkbox);
+
+  const accountLabel = item.label || item.accountId;
+  if (entry) {
+    const fileName = entry.filePath.split(/[\\/]/).pop();
+    const time = new Date(entry.downloadedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'checklist-file-link';
+    link.title = 'Pokaz plik w folderze';
+    link.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})${entry.manual ? ' (recznie)' : ''}`;
+    link.onclick = async () => {
+      const result = await window.api.showDownloadedFile(entry.filePath);
+      if (!result.ok) await askDecision({ title: 'Nie mozna pokazac pliku', message: result.error, tone: 'danger', actions: [{ id: 'ok', label: 'OK' }] });
+    };
+    row.appendChild(link);
+  } else {
+    const text = document.createElement('span');
+    text.textContent = `${item.platformLabel} - ${accountLabel}: ${failedKeys.has(key) ? 'blad - wymaga pliku' : 'nie pobrano'}`;
+    row.appendChild(text);
+  }
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'btn-secondary';
+  editBtn.textContent = 'Wgraj wlasny plik';
+  editBtn.onclick = () => attachManualFileFlow(item);
+  row.appendChild(editBtn);
+
+  return row;
+}
+
 async function renderChecklistSection() {
   const downloads = await window.api.getDownloadsStatus();
   const downloadedMap = new Map(downloads.map((d) => [`${d.platformId}:${d.accountId}`, d]));
@@ -560,7 +606,7 @@ async function renderChecklistSection() {
 
   const note = document.createElement('p');
   note.className = 'platform-note';
-  note.textContent = 'Checkbox zaznacza sie automatycznie, gdy plik zostanie faktycznie pobrany w tej sesji aplikacji - nie mozna go zaznaczyc recznie.';
+  note.textContent = 'Checkbox zaznacza sie sam po pobraniu pliku w tej sesji. Klik w nazwe pliku pokazuje go w folderze; "Wgraj wlasny plik" podmienia plik konta na wybrany recznie.';
   section.appendChild(note);
 
   if (reportAccountsCache.length > 0) {
@@ -596,28 +642,7 @@ async function renderChecklistSection() {
     list.className = 'checklist-list';
 
     for (const item of reportAccountsCache) {
-      const entry = downloadedMap.get(`${item.platformId}:${item.accountId}`);
-      const row = document.createElement('label');
-      row.className = 'checklist-item' + (entry ? ' checked' : '');
-
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = Boolean(entry);
-      checkbox.disabled = true;
-      row.appendChild(checkbox);
-
-      const text = document.createElement('span');
-      const accountLabel = item.label || item.accountId;
-      if (entry) {
-        const fileName = entry.filePath.split(/[\\/]/).pop();
-        const time = new Date(entry.downloadedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
-        text.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})`;
-      } else {
-        text.textContent = `${item.platformLabel} - ${accountLabel}: nie pobrano`;
-      }
-      row.appendChild(text);
-
-      list.appendChild(row);
+      list.appendChild(buildChecklistRow(item, downloadedMap.get(`${item.platformId}:${item.accountId}`)));
     }
     section.appendChild(list);
   }
@@ -750,28 +775,7 @@ async function renderGwarantChecklist() {
   list.className = 'checklist-list';
 
   for (const item of gwarantReportAccountsCache) {
-    const entry = downloadedMap.get(`${item.platformId}:${item.accountId}`);
-    const row = document.createElement('label');
-    row.className = 'checklist-item' + (entry ? ' checked' : '');
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = Boolean(entry);
-    checkbox.disabled = true;
-    row.appendChild(checkbox);
-
-    const text = document.createElement('span');
-    const accountLabel = item.label || item.accountId;
-    if (entry) {
-      const fileName = entry.filePath.split(/[\\/]/).pop();
-      const time = new Date(entry.downloadedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
-      text.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})`;
-    } else {
-      text.textContent = `${item.platformLabel} - ${accountLabel}: nie pobrano`;
-    }
-    row.appendChild(text);
-
-    list.appendChild(row);
+    list.appendChild(buildChecklistRow(item, downloadedMap.get(`${item.platformId}:${item.accountId}`)));
   }
   section.appendChild(list);
 
