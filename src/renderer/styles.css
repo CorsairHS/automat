@@ -626,3 +626,6 @@ button:disabled {
 ::-webkit-scrollbar-track {
   background: var(--page-background);
 }
+
+.accept-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--text-300); font-size: 13px; }
+.run-controls { display: inline-flex; gap: 8px; }

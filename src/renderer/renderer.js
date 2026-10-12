@@ -26,12 +26,14 @@ let deleteStatusElement = null;
 let reportAccountsCache = [];
 let downloadAllButton = null;
 let downloadAllStatusElement = null;
+let downloadAllControlsElement = null;
 // Konta zdublowane do zakladki Gwarant (przycisk "Dodaj do gwaranta" na karcie konta) -
 // osobna checklista/"Pobierz wszystkie" w tej zakladce, calkowicie niezalezna od Kontroli
 // pobran/wgrywania powyzej (patrz downloads:statusGwarant w main.js).
 let gwarantReportAccountsCache = [];
 let gwarantDownloadAllButton = null;
 let gwarantDownloadAllStatusElement = null;
+let gwarantDownloadAllControlsElement = null;
 // Zakladka platformy aktywna w widoku kont (Uber/Bolt/FreeNow/BoltFood/PartnerTax) -
 // trzymana poza render(), zeby przetrwac ponowne wywolania render() (np. po Zapisz/Usun/
 // Pobierz teraz) i partner nie wracal za kazdym razem do pierwszej zakladki.
@@ -63,6 +65,39 @@ function applyStatusMessage(el, message) {
 // Konta, ktorych ostatnie pobranie w tej sesji sie nie udalo/zostalo przerwane - na
 // czerwono w Kontroli pobran, dopoki nie pojawi sie plik (pobrany albo reczny).
 const failedKeys = new Set();
+
+const ACCEPT_DOWNLOADS_KEY = 'acceptEachDownload';
+const ACCEPT_UPLOADS_KEY = 'acceptEachUpload';
+
+function readToggle(storageKey) {
+  try {
+    return localStorage.getItem(storageKey) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function buildAcceptToggle(storageKey) {
+  const label = document.createElement('label');
+  label.className = 'accept-toggle';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = readToggle(storageKey);
+  input.onchange = () => {
+    try {
+      localStorage.setItem(storageKey, String(input.checked));
+    } catch {
+      // Brak dostepu do localStorage - przelacznik dziala do konca sesji okna.
+    }
+  };
+  label.append(input, ' Akceptuj kazdy plik');
+  return label;
+}
+
+const BETWEEN_ACCOUNTS_MIN_MS = 8000;
+const BETWEEN_ACCOUNTS_MAX_MS = 15000;
+// Konto aktualnie pobierane przez "Pobierz wszystkie" i flaga "Zatrzymaj wszystko".
+let bulkRun = null;
 
 /**
  * Panel decyzji nad cala aplikacja (klient, 2026-10-12: akceptacja kazdego pliku, pytanie
@@ -622,9 +657,24 @@ async function renderChecklistSection() {
     statusSpan.className = 'run-status';
     downloadAllStatusElement = statusSpan;
 
-    runBtn.onclick = () => runAllDownloads();
+    const controls = document.createElement('span');
+    controls.className = 'run-controls';
+    downloadAllControlsElement = controls;
+    if (bulkRun) runBtn.disabled = true;
+
+    runBtn.onclick = () =>
+      runAllDownloadsWithReview({
+        items: reportAccountsCache,
+        getRunButton: () => downloadAllButton,
+        getStatusEl: () => downloadAllStatusElement,
+        getControlsEl: () => downloadAllControlsElement,
+        toggleKey: ACCEPT_DOWNLOADS_KEY,
+        refresh: renderChecklistSection,
+      });
 
     runRow.appendChild(runBtn);
+    runRow.appendChild(buildAcceptToggle(ACCEPT_DOWNLOADS_KEY));
+    runRow.appendChild(controls);
     runRow.appendChild(statusSpan);
     section.appendChild(runRow);
     section.appendChild(buildBulkPeriodModeRow('default'));
@@ -650,42 +700,146 @@ async function renderChecklistSection() {
   appendOrReplaceSection(section);
 }
 
+function waitBetweenAccounts(getStatusEl, run) {
+  const totalMs = BETWEEN_ACCOUNTS_MIN_MS + Math.random() * (BETWEEN_ACCOUNTS_MAX_MS - BETWEEN_ACCOUNTS_MIN_MS);
+  const endAt = Date.now() + totalMs;
+  return new Promise((resolve) => {
+    const tick = () => {
+      const left = Math.ceil((endAt - Date.now()) / 1000);
+      if (run.stopRequested || left <= 0) return resolve();
+      const statusEl = getStatusEl();
+      if (statusEl) statusEl.textContent = `Nastepne konto za ${left} s...`;
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
+}
+
 /**
- * Uruchamia pobieranie po kolei (sekwencyjnie, nie rownolegle) dla wszystkich
- * skonfigurowanych kont Uber/Bolt/FreeNow. Sekwencyjnie, bo kazde pobranie otwiera
- * widoczne okno przegladarki (Playwright) - rownolegle uruchomienia mylilyby uzytkownika
- * i utrudnialy reczne dokonczenie 2FA. Blokuje wszystkie przyciski "Pobierz teraz" i
- * "Pobierz wszystkie" na czas trwania, zeby nie odpalic tego samego konta dwa razy naraz.
+ * Pyta w petli, dopoki decyzja nie jest ostateczna: wybor "manual" z anulowanym oknem
+ * wyboru pliku wraca do tego samego panelu (zamiast np. pobierac konto drugi raz).
  */
-async function runAllDownloads() {
-  if (reportAccountsCache.length === 0) return;
-
-  if (downloadAllButton) downloadAllButton.disabled = true;
-  for (const btn of runButtons.values()) btn.disabled = true;
-
-  let doneCount = 0;
-  for (const item of reportAccountsCache) {
-    const key = `${item.platformId}:${item.accountId}`;
-    const accountLabel = item.label || item.accountId;
-    if (downloadAllStatusElement) {
-      downloadAllStatusElement.textContent = `Pobieram (${doneCount + 1}/${reportAccountsCache.length}): ${item.platformLabel} - ${accountLabel}...`;
-    }
-    const statusSpan = statusElements.get(key);
-    if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
-
-    const result = await window.api.runSync(item.platformId, item.accountId);
-    if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
-    doneCount += 1;
-    // renderChecklistSection() tworzy nowy przycisk "Pobierz wszystkie" (podmienia caly
-    // element), wiec trzeba go ponownie zablokowac - inaczej staje sie klikalny w trakcie
-    // trwania petli.
-    await renderChecklistSection();
-    if (downloadAllButton) downloadAllButton.disabled = true;
+async function askUntilSettled(item, panel) {
+  for (;;) {
+    const choice = await askDecision(panel);
+    if (choice !== 'manual') return choice;
+    if (await attachManualFileFlow(item)) return 'manual';
   }
+}
 
-  if (downloadAllButton) downloadAllButton.disabled = false;
-  for (const btn of runButtons.values()) btn.disabled = false;
-  if (downloadAllStatusElement) downloadAllStatusElement.textContent = `Gotowe: pobrano ${doneCount}/${reportAccountsCache.length} kont.`;
+/**
+ * "Pobierz wszystkie" (klient, 2026-10-12): po kazdym pliku opcjonalna akceptacja, po
+ * bledzie/przerwaniu ZAWSZE pytanie (reczny plik / ponow / pomin), przerwa 8-15 s miedzy
+ * kontami, "Przerwij to konto" i "Zatrzymaj wszystko" przez caly czas.
+ */
+async function runAllDownloadsWithReview({ items, getRunButton, getStatusEl, getControlsEl, toggleKey, refresh }) {
+  if (items.length === 0 || bulkRun) return;
+  const run = { stopRequested: false, currentKey: null };
+  bulkRun = run;
+
+  const abortBtn = document.createElement('button');
+  abortBtn.type = 'button';
+  abortBtn.className = 'btn-delete';
+  abortBtn.textContent = 'Przerwij to konto';
+  abortBtn.disabled = true;
+  abortBtn.onclick = () => {
+    if (!run.currentKey) return;
+    const [platformId, accountId] = run.currentKey.split(':');
+    abortBtn.disabled = true;
+    window.api.abortSync(platformId, accountId);
+  };
+  const stopAllBtn = document.createElement('button');
+  stopAllBtn.type = 'button';
+  stopAllBtn.className = 'btn-secondary';
+  stopAllBtn.textContent = 'Zatrzymaj wszystko';
+  stopAllBtn.onclick = () => {
+    run.stopRequested = true;
+    stopAllBtn.disabled = true;
+  };
+
+  const lockUi = () => {
+    getRunButton()?.setAttribute('disabled', '');
+    for (const btn of runButtons.values()) btn.disabled = true;
+    getControlsEl()?.append(abortBtn, stopAllBtn);
+  };
+  const refreshAndLock = async () => {
+    await refresh();
+    lockUi();
+  };
+  const setStatus = (text) => {
+    const el = getStatusEl();
+    if (el) el.textContent = text;
+  };
+
+  lockUi();
+  let doneCount = 0;
+  try {
+    for (let i = 0; i < items.length && !run.stopRequested; i += 1) {
+      const item = items[i];
+      const key = `${item.platformId}:${item.accountId}`;
+      const accountName = `${item.platformLabel} - ${item.label || item.accountId}`;
+      if (i > 0) await waitBetweenAccounts(getStatusEl, run);
+      if (run.stopRequested) break;
+
+      for (;;) {
+        setStatus(`Pobieram (${i + 1}/${items.length}): ${accountName}...`);
+        const statusSpan = statusElements.get(key);
+        if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
+        run.currentKey = key;
+        abortBtn.disabled = false;
+        const result = await window.api.runSync(item.platformId, item.accountId);
+        run.currentKey = null;
+        abortBtn.disabled = true;
+        if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
+
+        let choice;
+        if (result.ok) {
+          failedKeys.delete(key);
+          await refreshAndLock();
+          if (!readToggle(toggleKey)) break;
+          choice = await askUntilSettled(item, {
+            title: `Pobrano: ${accountName}`,
+            message: result.filePath.split(/[\\/]/).pop(),
+            actions: [
+              { id: 'show', label: 'Pokaz plik', keepOpen: true, onClick: () => window.api.showDownloadedFile(result.filePath) },
+              { id: 'ok', label: 'OK, dalej', className: 'btn-run' },
+              { id: 'manual', label: 'Zly plik - wgraj wlasny' },
+              { id: 'stop', label: 'Zatrzymaj wszystko', className: 'btn-delete' },
+            ],
+          });
+        } else {
+          failedKeys.add(key);
+          await refreshAndLock();
+          choice = await askUntilSettled(item, {
+            title: result.aborted ? `Przerwano: ${accountName}` : `Blad: ${accountName}`,
+            message: result.error,
+            tone: 'danger',
+            actions: [
+              { id: 'manual', label: 'Wgraj plik recznie', className: 'btn-run' },
+              { id: 'retry', label: 'Sprobuj ponownie' },
+              { id: 'skip', label: 'Pomin konto' },
+              { id: 'stop', label: 'Zatrzymaj wszystko', className: 'btn-delete' },
+            ],
+          });
+        }
+        if (choice === 'retry') continue;
+        if (choice === 'stop') run.stopRequested = true;
+        break;
+      }
+      doneCount += 1;
+    }
+  } finally {
+    bulkRun = null;
+    abortBtn.remove();
+    stopAllBtn.remove();
+    await refresh();
+    for (const btn of runButtons.values()) btn.disabled = false;
+  }
+  setStatus(
+    run.stopRequested
+      ? `Zatrzymano po ${doneCount}/${items.length} kontach.`
+      : `Gotowe: przetworzono ${doneCount}/${items.length} kont.`
+  );
 }
 
 /**
@@ -764,9 +918,24 @@ async function renderGwarantChecklist() {
   statusSpan.className = 'run-status';
   gwarantDownloadAllStatusElement = statusSpan;
 
-  runBtn.onclick = () => runAllGwarantDownloads();
+  const controls = document.createElement('span');
+  controls.className = 'run-controls';
+  gwarantDownloadAllControlsElement = controls;
+  if (bulkRun) runBtn.disabled = true;
+
+  runBtn.onclick = () =>
+    runAllDownloadsWithReview({
+      items: gwarantReportAccountsCache,
+      getRunButton: () => gwarantDownloadAllButton,
+      getStatusEl: () => gwarantDownloadAllStatusElement,
+      getControlsEl: () => gwarantDownloadAllControlsElement,
+      toggleKey: ACCEPT_DOWNLOADS_KEY,
+      refresh: refreshGwarantChecklist,
+    });
 
   runRow.appendChild(runBtn);
+  runRow.appendChild(buildAcceptToggle(ACCEPT_DOWNLOADS_KEY));
+  runRow.appendChild(controls);
   runRow.appendChild(statusSpan);
   section.appendChild(runRow);
   section.appendChild(buildBulkPeriodModeRow('gwarant'));
@@ -784,7 +953,7 @@ async function renderGwarantChecklist() {
 
 /**
  * Podmienia w miejscu tylko checkliste Gwaranta wewnatrz #gwarant-section (bez przebudowy
- * calej zakladki) - analogicznie do renderChecklistSection() w petli runAllDownloads.
+ * calej zakladki) - analogicznie do renderChecklistSection() w petli runAllDownloadsWithReview.
  */
 async function refreshGwarantChecklist() {
   const parent = document.getElementById('gwarant-section');
@@ -796,40 +965,6 @@ async function refreshGwarantChecklist() {
   } else {
     parent.insertBefore(newSection, parent.children[2] || null);
   }
-}
-
-/**
- * Odpowiednik runAllDownloads() dla zakladki Gwarant - ta sama sekwencyjna logika
- * (jedno widoczne okno przegladarki na raz), ale nad gwarantReportAccountsCache i wlasnymi
- * elementami przycisku/statusu, zeby dzialac calkowicie niezaleznie od "Pobierz wszystkie"
- * w Kontroli pobran.
- */
-async function runAllGwarantDownloads() {
-  if (gwarantReportAccountsCache.length === 0) return;
-
-  if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = true;
-  for (const btn of runButtons.values()) btn.disabled = true;
-
-  let doneCount = 0;
-  for (const item of gwarantReportAccountsCache) {
-    const key = `${item.platformId}:${item.accountId}`;
-    const accountLabel = item.label || item.accountId;
-    if (gwarantDownloadAllStatusElement) {
-      gwarantDownloadAllStatusElement.textContent = `Pobieram (${doneCount + 1}/${gwarantReportAccountsCache.length}): ${item.platformLabel} - ${accountLabel}...`;
-    }
-    const statusSpan = statusElements.get(key);
-    if (statusSpan) statusSpan.textContent = 'Uruchamiam przegladarke...';
-
-    const result = await window.api.runSync(item.platformId, item.accountId);
-    if (statusSpan) statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
-    doneCount += 1;
-    await refreshGwarantChecklist();
-    if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = true;
-  }
-
-  if (gwarantDownloadAllButton) gwarantDownloadAllButton.disabled = false;
-  for (const btn of runButtons.values()) btn.disabled = false;
-  if (gwarantDownloadAllStatusElement) gwarantDownloadAllStatusElement.textContent = `Gotowe: pobrano ${doneCount}/${gwarantReportAccountsCache.length} kont.`;
 }
 
 /**
@@ -1235,8 +1370,16 @@ function renderAccountCard(platform, account, options = {}) {
     statusElements.set(statusKey, statusSpan);
     runButtons.set(statusKey, runBtn);
 
+    const abortBtn = document.createElement('button');
+    abortBtn.type = 'button';
+    abortBtn.className = 'btn-delete';
+    abortBtn.textContent = 'Przerwij';
+    abortBtn.hidden = true;
+    abortBtn.onclick = () => window.api.abortSync(platform.id, account.accountId);
+
     runBtn.onclick = async () => {
       runBtn.disabled = true;
+      abortBtn.hidden = false;
       statusSpan.textContent = 'Zapisuje ustawienia i uruchamiam przegladarke...';
       // "Pobierz teraz" uruchamia synchronizacje na podstawie configu zapisanego na
       // dysku (window.api.runSync przyjmuje tylko accountId - runner.js/credentialStore
@@ -1250,11 +1393,30 @@ function renderAccountCard(platform, account, options = {}) {
       await window.api.saveAccount(platform.id, collectAccountPayload());
       const result = await window.api.runSync(platform.id, account.accountId);
       runBtn.disabled = false;
+      abortBtn.hidden = true;
       statusSpan.textContent = result.ok ? `Gotowe: ${result.filePath}` : `Blad: ${result.error}`;
-      if (result.ok) await renderChecklistSection();
+      const item = { platformId: platform.id, accountId: account.accountId, label: account.label, platformLabel: platform.label };
+      if (result.ok) {
+        failedKeys.delete(statusKey);
+        await refreshChecklists();
+        return;
+      }
+      failedKeys.add(statusKey);
+      await refreshChecklists();
+      const choice = await askDecision({
+        title: result.aborted ? `Przerwano: ${platform.label} - ${account.label}` : `Blad: ${platform.label} - ${account.label}`,
+        message: result.error,
+        tone: 'danger',
+        actions: [
+          { id: 'manual', label: 'Wgraj plik recznie', className: 'btn-run' },
+          { id: 'close', label: 'Zamknij' },
+        ],
+      });
+      if (choice === 'manual') await attachManualFileFlow(item);
     };
 
     runRow.appendChild(runBtn);
+    runRow.appendChild(abortBtn);
     runRow.appendChild(statusSpan);
     card.appendChild(runRow);
   }
