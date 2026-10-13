@@ -701,17 +701,20 @@ async function renderChecklistSection() {
       if (bulkRun.section === 'default') controls.append(bulkRun.abortBtn, bulkRun.stopAllBtn);
     }
 
-    runBtn.onclick = () =>
+    const startRun = (items) =>
       runAllDownloadsWithReview({
-        items: reportAccountsCache,
+        items,
         section: 'default',
         getRunButton: () => downloadAllButton,
         getStatusEl: () => downloadAllStatusElement,
         getControlsEl: () => downloadAllControlsElement,
         toggleKey: ACCEPT_DOWNLOADS_KEY,
       });
+    runBtn.onclick = () => startRun(reportAccountsCache);
 
     runRow.appendChild(runBtn);
+    const finishBtn = buildFinishButton(reportAccountsCache, downloadedMap, startRun);
+    if (finishBtn) runRow.appendChild(finishBtn);
     runRow.appendChild(buildAcceptToggle(ACCEPT_DOWNLOADS_KEY));
     runRow.appendChild(controls);
     runRow.appendChild(statusSpan);
@@ -737,6 +740,28 @@ async function renderChecklistSection() {
   }
 
   appendOrReplaceSection(section);
+}
+
+/**
+ * "Dokoncz pobieranie (N)" (klient, 2026-10-13): ta sama petla co "Pobierz wszystkie", ale
+ * tylko po kontach bez pliku w tej sesji - zostawionych po "Zatrzymaj wszystko",
+ * pominietych i z bledem. Konta z plikiem (pobranym albo recznym) sa pomijane. Pokazywany
+ * tylko, gdy czesc kont ma juz plik - przy zadnym pobranym dublowalby "Pobierz wszystkie".
+ */
+function buildFinishButton(items, downloadedMap, startRun) {
+  const missing = items.filter((item) => !downloadedMap.has(`${item.platformId}:${item.accountId}`));
+  if (missing.length === 0 || missing.length === items.length) return null;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.textContent = `Dokoncz pobieranie (${missing.length})`;
+  btn.disabled = Boolean(bulkRun);
+  btn.onclick = () => {
+    btn.disabled = true;
+    startRun(missing);
+  };
+  return btn;
 }
 
 function waitBetweenAccounts(getStatusEl, run) {
@@ -968,17 +993,20 @@ async function renderGwarantChecklist() {
     if (bulkRun.section === 'gwarant') controls.append(bulkRun.abortBtn, bulkRun.stopAllBtn);
   }
 
-  runBtn.onclick = () =>
+  const startRun = (items) =>
     runAllDownloadsWithReview({
-      items: gwarantReportAccountsCache,
+      items,
       section: 'gwarant',
       getRunButton: () => gwarantDownloadAllButton,
       getStatusEl: () => gwarantDownloadAllStatusElement,
       getControlsEl: () => gwarantDownloadAllControlsElement,
       toggleKey: ACCEPT_GWARANT_DOWNLOADS_KEY,
     });
+  runBtn.onclick = () => startRun(gwarantReportAccountsCache);
 
   runRow.appendChild(runBtn);
+  const finishBtn = buildFinishButton(gwarantReportAccountsCache, downloadedMap, startRun);
+  if (finishBtn) runRow.appendChild(finishBtn);
   runRow.appendChild(buildAcceptToggle(ACCEPT_GWARANT_DOWNLOADS_KEY));
   runRow.appendChild(controls);
   runRow.appendChild(statusSpan);
