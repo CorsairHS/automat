@@ -50,7 +50,24 @@ function parsePolishMonthDate(day, monthAbbrev, year) {
   return toISODate(new Date(Number(year), monthIndex, Number(day)));
 }
 
+function isoWeekRange(year, week) {
+  const monday = getIsoWeekMonday(Number(year), Number(week));
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  return { periodStart: toISODate(monday), periodEnd: toISODate(sunday) };
+}
+
 function parseBoltFilename(filename) {
+  // Od 2026-10-13 Bolt nazywa raport pelnego tygodnia numerem tygodnia ISO
+  // ("Zarobki na kierowce-2026W41-<firma>.csv") zamiast zakresem dat - zgloszenie klienta,
+  // poprawny plik byl odrzucany jako "nierozpoznany format". Stary format zostaje
+  // obslugiwany (np. zakres niestandardowy, ktory nie jest pelnym tygodniem).
+  const weekMatch = filename.match(/^Zarobki na kierowc.-(\d{4})W(\d{1,2})-(.+)\.csv$/i);
+  if (weekMatch) {
+    const [, year, week, company] = weekMatch;
+    return { company, ...isoWeekRange(year, week) };
+  }
+
   const match = filename.match(/^Zarobki na kierowc.-(\d{1,2}) (\S+) (\d{4})-(\d{1,2}) (\S+) (\d{4})-(.+)\.csv$/i);
   if (!match) {
     throw new Error(`Nierozpoznany format nazwy pliku Bolt: "${filename}"`);
@@ -99,10 +116,7 @@ function parseBoltFoodFilename(filename) {
     throw new Error(`Nierozpoznany format nazwy pliku Bolt Food: "${filename}"`);
   }
   const [, year, week] = match;
-  const monday = getIsoWeekMonday(Number(year), Number(week));
-  const sunday = new Date(monday);
-  sunday.setDate(sunday.getDate() + 6);
-  return { company: null, periodStart: toISODate(monday), periodEnd: toISODate(sunday) };
+  return { company: null, ...isoWeekRange(year, week) };
 }
 
 const PLATFORM_PARSERS = {

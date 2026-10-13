@@ -73,6 +73,11 @@ test.describe('parseBoltFilename', () => {
     expect(result).toEqual({ company: 'DA INVESTMENT SP_ Z O_O_', periodStart: '2026-08-31', periodEnd: '2026-09-01' });
   });
 
+  test('parsuje format tygodniowy ISO (Bolt od 2026-10-13: "2026W41")', () => {
+    const result = parseBoltFilename('Zarobki na kierowcę-2026W41-DA INVESTMENT SP_ Z O_O_.csv');
+    expect(result).toEqual({ company: 'DA INVESTMENT SP_ Z O_O_', periodStart: '2026-10-05', periodEnd: '2026-10-11' });
+  });
+
   test('rzuca na nierozpoznana nazwe', () => {
     expect(() => parseBoltFilename('cos_zupelnie_innego.csv')).toThrow();
   });
