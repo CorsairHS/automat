@@ -2,7 +2,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { test, expect } = require('playwright/test');
-const { attachManualFile, renameDownloadedFile, getDownloadDir } = require('../src/main/automation/downloadFiles');
+const { attachManualFile, renameDownloadedFile, getDownloadDir, uploadFileName } = require('../src/main/automation/downloadFiles');
 
 const account = {
   accountId: 'acc-1',
@@ -71,4 +71,29 @@ test.describe('renameDownloadedFile', () => {
 
 test('getDownloadDir: folder per platforma i etykieta konta', () => {
   expect(getDownloadDir('/root', 'uber', account)).toBe(path.join('/root', 'downloads', 'uber', 'Uber_-_Leszno'));
+});
+
+test.describe('uploadFileName', () => {
+  test('usuwa prefiks Miasto - Firma - Platforma (Uber, 115 -> 84 znaki)', () => {
+    const name = uploadFileName(
+      'C:/x/Wrocław - Unity Drive - Uber - 20261012-20261014-payments_driver-UNITY_DRIVE_SPKA_Z_OGRANICZON_ODPOWIEDZIALNOCI.csv',
+      { city: 'Wrocław', company: 'Unity Drive' },
+    );
+    expect(name).toBe('20261012-20261014-payments_driver-UNITY_DRIVE_SPKA_Z_OGRANICZON_ODPOWIEDZIALNOCI.csv');
+  });
+
+  test('platforma ze spacja (Bolt Food)', () => {
+    expect(uploadFileName('/x/Poznań - DA Investment - Bolt Food - raport.csv', { city: 'Poznań', company: 'DA Investment' }))
+      .toBe('raport.csv');
+  });
+
+  test('plik bez prefiksu zostaje bez zmian', () => {
+    expect(uploadFileName('/x/raport-2026W41.csv', { city: 'Wrocław', company: 'Unity Drive' })).toBe('raport-2026W41.csv');
+  });
+
+  test('za dluga nazwa przycieta do 100 znakow z rozszerzeniem', () => {
+    const name = uploadFileName(`/x/${'a'.repeat(150)}.csv`, { city: 'Wrocław', company: 'Unity Drive' });
+    expect(name).toHaveLength(100);
+    expect(name.endsWith('.csv')).toBe(true);
+  });
 });

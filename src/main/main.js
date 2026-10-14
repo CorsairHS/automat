@@ -394,14 +394,17 @@ ipcMain.handle('downloads:exportZip', async () => {
 // Stan trwajacego wgrywania: flaga "Zatrzymaj" i ewentualne oczekujace pytanie o akceptacje.
 let uploadControl = null;
 
-ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
+// source: 'default' (Kontrola pobran) albo 'gwarant' (osobna checklista zakladki Gwarant -
+// wlasny przycisk wgrywania, pliki z lastGwarantDownloads).
+ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'default' } = {}) => {
   if (uploadControl) return { ok: false, error: 'Wgrywanie juz trwa.' };
   const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
   if (!partnertaxAccount) {
     return { ok: false, error: 'Brak skonfigurowanego konta PartnerTax admin.' };
   }
 
-  const uploads = getOrderedDownloads(lastDownloads);
+  const sourceMap = source === 'gwarant' ? lastGwarantDownloads : lastDownloads;
+  const uploads = getOrderedDownloads(sourceMap);
   if (uploads.length === 0) {
     return { ok: false, error: 'Brak pobranych plikow do wgrania - najpierw pobierz raporty (Uber/Bolt/FreeNow).' };
   }
@@ -427,7 +430,7 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
         })
     : undefined;
 
-  logger.info(`[upload] start, plikow: ${uploads.length}${confirmEach ? ' (z akceptacja kazdego pliku)' : ''}`);
+  logger.info(`[upload${source === 'gwarant' ? ' gwarant' : ''}] start, plikow: ${uploads.length}${confirmEach ? ' (z akceptacja kazdego pliku)' : ''}`);
   try {
     await runUpload(app.getPath('userData'), partnertaxAccount, uploads, {
       statusCallback,
@@ -438,7 +441,7 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
     // (reczny plik / "Pobierz teraz") zostaja na liscie.
     for (const u of uploads) {
       const key = `${u.platformId}:${u.accountId}`;
-      if (lastDownloads.get(key)?.filePath === u.filePath) lastDownloads.delete(key);
+      if (sourceMap.get(key)?.filePath === u.filePath) sourceMap.delete(key);
     }
     logger.info(`[upload] sukces, wgrano: ${uploads.length}`);
     return { ok: true, count: uploads.length };
@@ -448,7 +451,7 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false } = {}) => {
     // drugi raz (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
     for (const upload of error.succeededUploads || []) {
       const key = `${upload.platformId}:${upload.accountId}`;
-      if (lastDownloads.get(key)?.filePath === upload.filePath) lastDownloads.delete(key);
+      if (sourceMap.get(key)?.filePath === upload.filePath) sourceMap.delete(key);
     }
     if (error instanceof UploadStoppedError) {
       const count = (error.succeededUploads || []).length;

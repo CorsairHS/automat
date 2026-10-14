@@ -69,6 +69,7 @@ const failedKeys = new Set();
 const ACCEPT_DOWNLOADS_KEY = 'acceptEachDownload';
 const ACCEPT_GWARANT_DOWNLOADS_KEY = 'acceptEachGwarantDownload';
 const ACCEPT_UPLOADS_KEY = 'acceptEachUpload';
+const ACCEPT_GWARANT_UPLOADS_KEY = 'acceptEachGwarantUpload';
 
 function readToggle(storageKey) {
   try {
@@ -206,7 +207,7 @@ window.api.onUploadStatus(({ message }) => {
 // Akceptacja po kazdym wgranym pliku (przelacznik w sekcji wgrywania) - main czeka na
 // odpowiedz, okno admina zostaje otwarte, wiec partner moze sprawdzic wiersz rozliczenia.
 window.api.onUploadConfirm(async ({ index, total, platformId, accountId, fileName }) => {
-  const item = reportAccountsCache.find((a) => a.platformId === platformId && a.accountId === accountId);
+  const item = [...reportAccountsCache, ...gwarantReportAccountsCache].find((a) => a.platformId === platformId && a.accountId === accountId);
   const name = item ? `${item.platformLabel} - ${item.label || accountId}` : platformId;
   const choice = await askDecision({
     overlayClass: 'decision-overlay--upload',
@@ -928,10 +929,11 @@ async function renderGwarantSection(subsections) {
 
   const note = document.createElement('p');
   note.className = 'platform-note';
-  note.textContent = 'Konta dodane przyciskiem "Dodaj do gwaranta" na kartach w zakladkach platform - niezalezne kopie (edycja tutaj nie wplywa na oryginalne konto i odwrotnie). Maja wlasna checkliste i "Pobierz teraz" ponizej - nie wchodza do Kontroli pobran / Pobierz wszystkie / wgrywania do PartnerTax na dole strony.';
+  note.textContent = 'Konta dodane przyciskiem "Dodaj do gwaranta" na kartach w zakladkach platform - niezalezne kopie (edycja tutaj nie wplywa na oryginalne konto i odwrotnie). Maja wlasna checkliste, "Pobierz teraz" i wgrywanie do PartnerTax ponizej - nie wchodza do Kontroli pobran / Pobierz wszystkie / wgrywania do PartnerTax na dole strony.';
   container.appendChild(note);
 
   container.appendChild(await renderGwarantChecklist());
+  container.appendChild(renderGwarantUploadSection());
 
   if (subsections.length === 0) {
     const empty = document.createElement('p');
@@ -945,6 +947,30 @@ async function renderGwarantSection(subsections) {
   }
 
   return container;
+}
+
+/**
+ * Wgrywanie do PartnerTax plikow z checklisty Gwaranta - ten sam cel co glowny przycisk
+ * (pierwsze niezakonczone rozliczenie), ale tylko pliki kont z grupy 'gwarant'. Osobna
+ * sekcja (nie w #gwarant-checklist-section), zeby odswiezenie checklisty w trakcie
+ * wgrywania nie podmienilo elementu statusu.
+ */
+function renderGwarantUploadSection() {
+  const section = document.createElement('section');
+  section.id = 'gwarant-upload-section';
+  section.className = 'platform-section';
+
+  const header = document.createElement('h3');
+  header.textContent = 'Wgrywanie do PartnerTax (Gwarant)';
+  section.appendChild(header);
+
+  section.appendChild(buildUploadRow({
+    source: 'gwarant',
+    buttonLabel: 'Wgraj do PartnerTax (Gwarant)',
+    toggleKey: ACCEPT_GWARANT_UPLOADS_KEY,
+    refreshChecklist: refreshGwarantChecklist,
+  }));
+  return section;
 }
 
 /**
@@ -1041,6 +1067,65 @@ async function refreshGwarantChecklist() {
 }
 
 /**
+ * Wiersz "Wgraj do PartnerTax" + akceptacja + Zatrzymaj + status - wspolny dla sekcji
+ * wgrywania na dole strony (source 'default') i zakladki Gwarant (source 'gwarant', pliki z
+ * osobnej checklisty Gwaranta). Main pozwala na jedno wgrywanie naraz, wiec komunikaty
+ * upload:status trafiaja do statusu wiersza, ktory ostatnio wystartowal.
+ */
+function buildUploadRow({ source, buttonLabel, toggleKey, refreshChecklist }) {
+  const runRow = document.createElement('div');
+  runRow.className = 'run-row';
+
+  const runBtn = document.createElement('button');
+  runBtn.className = 'btn-run';
+  runBtn.textContent = buttonLabel;
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'run-status';
+
+  const stopBtn = document.createElement('button');
+  stopBtn.type = 'button';
+  stopBtn.className = 'btn-delete';
+  stopBtn.textContent = 'Zatrzymaj';
+  stopBtn.hidden = true;
+  stopBtn.onclick = async () => {
+    stopBtn.disabled = true;
+    statusSpan.textContent = 'Zatrzymuje po biezacym pliku...';
+    await window.api.stopUpload();
+  };
+
+  runBtn.onclick = async () => {
+    runBtn.disabled = true;
+    stopBtn.hidden = false;
+    stopBtn.disabled = false;
+    uploadStatusElement = statusSpan;
+    statusSpan.textContent = 'Uruchamiam przegladarke...';
+    let result;
+    try {
+      result = await window.api.runUpload({ confirmEach: readToggle(toggleKey), source });
+    } catch (err) {
+      result = { ok: false, error: err && err.message ? err.message : String(err) };
+    } finally {
+      runBtn.disabled = false;
+      stopBtn.hidden = true;
+      // Panel akceptacji, ktory moglby zostac otwarty po "Zatrzymaj" z zewnatrz, jest juz
+      // nieaktualny.
+      document.querySelectorAll('.decision-overlay--upload').forEach((el) => el.remove());
+    }
+    if (result.ok) statusSpan.textContent = `Gotowe: wgrano ${result.count} plik(ow).`;
+    else if (result.stopped) statusSpan.textContent = `Zatrzymano: wgrano ${result.count} plik(ow). Pozostale zostaja na liscie - "${buttonLabel}" dokonczy reszte.`;
+    else statusSpan.textContent = `Blad: ${result.error}`;
+    await refreshChecklist();
+  };
+
+  runRow.appendChild(runBtn);
+  runRow.appendChild(buildAcceptToggle(toggleKey));
+  runRow.appendChild(stopBtn);
+  runRow.appendChild(statusSpan);
+  return runRow;
+}
+
+/**
  * Wgrywanie do PartnerTax admin dziala na plikach ostatnio pobranych w tej samej sesji
  * aplikacji (trzymanych w pamieci procesu main - patrz lastDownloads w main.js), wiec
  * przycisk jest jeden, globalny, nie per-konto: klika sie go po pobraniu raportow
@@ -1064,56 +1149,12 @@ function renderUploadSection() {
   note.textContent = 'Wgrywa do pierwszego niezakonczonego rozliczenia (Finished = False) wszystkie pliki pobrane w tej sesji aplikacji (Uber/Bolt/FreeNow "Pobierz teraz" powyzej).';
   section.appendChild(note);
 
-  const runRow = document.createElement('div');
-  runRow.className = 'run-row';
-
-  const runBtn = document.createElement('button');
-  runBtn.className = 'btn-run';
-  runBtn.textContent = 'Wgraj do PartnerTax';
-
-  const statusSpan = document.createElement('span');
-  statusSpan.className = 'run-status';
-  uploadStatusElement = statusSpan;
-
-  const stopBtn = document.createElement('button');
-  stopBtn.type = 'button';
-  stopBtn.className = 'btn-delete';
-  stopBtn.textContent = 'Zatrzymaj';
-  stopBtn.hidden = true;
-  stopBtn.onclick = async () => {
-    stopBtn.disabled = true;
-    statusSpan.textContent = 'Zatrzymuje po biezacym pliku...';
-    await window.api.stopUpload();
-  };
-
-  runBtn.onclick = async () => {
-    runBtn.disabled = true;
-    stopBtn.hidden = false;
-    stopBtn.disabled = false;
-    statusSpan.textContent = 'Uruchamiam przegladarke...';
-    let result;
-    try {
-      result = await window.api.runUpload({ confirmEach: readToggle(ACCEPT_UPLOADS_KEY) });
-    } catch (err) {
-      result = { ok: false, error: err && err.message ? err.message : String(err) };
-    } finally {
-      runBtn.disabled = false;
-      stopBtn.hidden = true;
-      // Panel akceptacji, ktory moglby zostac otwarty po "Zatrzymaj" z zewnatrz, jest juz
-      // nieaktualny.
-      document.querySelectorAll('.decision-overlay--upload').forEach((el) => el.remove());
-    }
-    if (result.ok) statusSpan.textContent = `Gotowe: wgrano ${result.count} plik(ow).`;
-    else if (result.stopped) statusSpan.textContent = `Zatrzymano: wgrano ${result.count} plik(ow). Pozostale zostaja na liscie - "Wgraj do PartnerTax" dokonczy reszte.`;
-    else statusSpan.textContent = `Blad: ${result.error}`;
-    await renderChecklistSection();
-  };
-
-  runRow.appendChild(runBtn);
-  runRow.appendChild(buildAcceptToggle(ACCEPT_UPLOADS_KEY));
-  runRow.appendChild(stopBtn);
-  runRow.appendChild(statusSpan);
-  section.appendChild(runRow);
+  section.appendChild(buildUploadRow({
+    source: 'default',
+    buttonLabel: 'Wgraj do PartnerTax',
+    toggleKey: ACCEPT_UPLOADS_KEY,
+    refreshChecklist: renderChecklistSection,
+  }));
 
   document.getElementById('platform-list').appendChild(section);
 }

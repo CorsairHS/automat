@@ -1,3 +1,7 @@
+const fs = require('fs');
+const path = require('path');
+const logger = require('../../logger');
+const { uploadFileName } = require('../downloadFiles');
 const { waitForAuthStateToSettle, waitForLoginCompletion } = require('../loginHelpers');
 const { matchOptionValue, findAllOptionValues } = require('../optionMatching');
 const { normalizeBaseUrl, buildAdminUrls } = require('../../partnerTaxConfig');
@@ -19,6 +23,12 @@ async function pause(page, ms = STEP_DELAY_MS) {
 // a wlasciwym dla uploadu jest "Bolt". Przy usuwaniu akceptujemy wszystkie wpisy pasujace
 // po normalizacji (raporty wgrane recznie bywaja pod archiwalnym wariantem - znalezione
 // na zywo 2026-08-21).
+const UPLOAD_MIME_TYPES = {
+  '.csv': 'text/csv',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+};
+
 const SYSTEM_LABEL_CANDIDATES = {
   bolt: ['Bolt'],
   uber: ['Uber'],
@@ -164,6 +174,20 @@ function realSourceFieldSelector(tag, fieldSuffix) {
   return `${tag}[name^="sources-"][name$="-${fieldSuffix}"]:not([name*="__prefix__"])`;
 }
 
+// Zapisuje HTML strony z odrzuconym formularzem do katalogu logow (obok automat.log) -
+// jedyny sposob, zeby zobaczyc komunikat Django, gdy nie ma go w ul.errorlist.
+async function saveRejectedFormSnapshot(page) {
+  const logFile = logger.getLogFilePath();
+  if (!logFile) return null;
+  try {
+    const snapshotPath = path.join(path.dirname(logFile), `partnertax-odrzucony-zapis-${new Date().toISOString().replace(/[:.]/g, '-')}.html`);
+    fs.writeFileSync(snapshotPath, await page.content());
+    return snapshotPath;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Klika "Save and continue editing" i czeka na potwierdzenie zapisu. Zapis (zwlaszcza z
  * duzym plikiem lub przy wolniejszym lączu klienta) potrafi trwac dluzej niz Playwright
@@ -202,7 +226,43 @@ async function clickSaveAndVerify(page, verifyFn, { timeoutMs = 15 * 60 * 1000, 
       .evaluateAll((els) => els.map((el) => el.textContent).join(' '))
       .catch(() => null);
     if (errorText) {
-      throw new Error(`PartnerTax admin odrzucil zapis: ${errorText.trim()}`);
+      // Sam .errornote to ogolnik ("Please correct the errors below.") - konkretny powod
+      // Django wypisuje przy polach w ul.errorlist. Bez niego nie wiadomo, ktory wiersz
+      // i ktore pole odrzucil (zaobserwowane 2026-10-14).
+      const details = await page
+        .locator('ul.errorlist')
+        .evaluateAll((lists) => lists.map((ul) => {
+          const text = Array.from(ul.querySelectorAll('li')).map((li) => li.textContent.trim()).filter(Boolean).join('; ');
+          if (!text) return null;
+          // Pole: klasa "field-<nazwa>" wiersza formularza albo komorki inline'u.
+          const holder = ul.closest('[class*="field-"]');
+          const fieldClass = holder && Array.from(holder.classList).find((c) => c.startsWith('field-'));
+          // Wiersz inline'u ("sources-3-...") - numer z nazwy pola w tym samym lub nastepnym wierszu tabeli.
+          const row = ul.closest('tr');
+          const scope = row && row.classList.contains('row-form-errors') ? row.nextElementSibling : row;
+          const named = scope && scope.querySelector('[name^="sources-"]');
+          const idx = named && (named.getAttribute('name').match(/^sources-(\d+)-/) || [])[1];
+          const where = [idx !== undefined && idx !== null ? `zrodlo danych nr ${Number(idx) + 1}` : null,
+            fieldClass ? fieldClass.slice('field-'.length) : null].filter(Boolean).join(', ');
+          return where ? `${where}: ${text}` : text;
+        }).filter(Boolean).join(' | '))
+        .catch(() => '');
+      let extra = details;
+      if (!extra) {
+        // ul.errorlist nic nie dal (zaobserwowane 2026-10-14 przy Uberze z Gwaranta) -
+        // szersze szukanie: dowolny widoczny element z "error" w klasie poza samym
+        // .errornote, plus zrzut HTML strony obok automat.log do recznej analizy.
+        extra = await page
+          .locator('[class*="error"]:not(.errornote)')
+          .evaluateAll((els) => Array.from(new Set(els
+            .filter((el) => el.offsetParent !== null || el.getClientRects().length > 0)
+            .map((el) => el.textContent.replace(/\s+/g, ' ').trim())
+            .filter(Boolean))).join(' | '))
+          .catch(() => '');
+        const snapshotPath = await saveRejectedFormSnapshot(page);
+        if (snapshotPath) extra = `${extra ? `${extra} ` : ''}(zrzut strony: ${snapshotPath})`;
+      }
+      throw new Error(`PartnerTax admin odrzucil zapis: ${errorText.trim()}${extra ? ` - ${extra}` : ''}`);
     }
     await page.waitForTimeout(1000);
   }
@@ -252,7 +312,12 @@ async function addDataSourceFile(page, { platformId, city, company, filePath }, 
   await pause(page);
   await page.locator(realSourceFieldSelector('select', 'company')).last().selectOption(companyValue);
   await pause(page);
-  await page.locator(realSourceFieldSelector('input[type="file"]', 'file')).last().setInputFiles(filePath);
+  // Nazwa wysylana do PartnerTax bez prefiksu konta i max 100 znakow - patrz uploadFileName.
+  await page.locator(realSourceFieldSelector('input[type="file"]', 'file')).last().setInputFiles({
+    name: uploadFileName(filePath, { city, company }),
+    mimeType: UPLOAD_MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
+    buffer: fs.readFileSync(filePath),
+  });
   await pause(page);
 
   // Wiersz jeszcze niezapisany ma pole System jako <select>; po zapisie Django admin
