@@ -105,7 +105,13 @@ async function syncFreenowAccount({ context, account, downloadDir, statusCallbac
   // ale zwrocil plik "earnings_2026-08-17_2026-08-18..." z wczesniejszego testu).
   // Rozpakowujemy wiec do dedykowanego, unikalnego podkatalogu per-uruchomienie, zeby
   // stare pliki nie mogly wplynac na wybor.
+  // Poprawka (2026-10-14): nazwa podkatalogu zalezy tylko od okresu, wiec ponowne pobranie
+  // tego samego tygodnia trafia do TEGO SAMEGO katalogu - lezal w nim plik z poprzedniego
+  // uruchomienia, juz z prefiksem "Miasto - Firma - FreeNow - ", ktory .find() wybieral
+  // zamiast swiezego (walidator odrzucal go jako "nierozpoznany format nazwy"). Czyscimy
+  // katalog przed rozpakowaniem.
   const extractDir = path.join(downloadDir, path.basename(zipPath, path.extname(zipPath)));
+  fs.rmSync(extractDir, { recursive: true, force: true });
   fs.mkdirSync(extractDir, { recursive: true });
   await extractZip(zipPath, { dir: extractDir });
   const extractedFiles = fs.readdirSync(extractDir);

@@ -79,6 +79,23 @@ test.describe('FreeNow resilience', () => {
     await inspectionPage.close();
   });
 
+  test('ponowne pobranie tego samego okresu: pomija plik z poprzedniego uruchomienia (z prefiksem)', async () => {
+    const account = makeAccount();
+    const firstContext = await browser.newContext({ acceptDownloads: true });
+    await installFreenowMock(firstContext, {});
+    const first = await syncFreenowAccount({ context: firstContext, account, downloadDir, statusCallback: () => {} });
+    // Jak renameDownloadedFile po udanym pierwszym uruchomieniu.
+    const prefixed = path.join(path.dirname(first.filePath), `Białystok - UNITY DRIVE - FreeNow - ${path.basename(first.filePath)}`);
+    fs.renameSync(first.filePath, prefixed);
+
+    const secondContext = await browser.newContext({ acceptDownloads: true });
+    await installFreenowMock(secondContext, {});
+    const second = await syncFreenowAccount({ context: secondContext, account, downloadDir, statusCallback: () => {} });
+
+    expect(path.basename(second.filePath)).toBe(path.basename(first.filePath));
+    expect(fs.existsSync(second.filePath)).toBe(true);
+  });
+
   test('brak wariantu WITH VAT: syncFreenowAccount rzuca czytelnym bledem', async () => {
     const context = await browser.newContext({ acceptDownloads: true });
     await installFreenowMock(context, { includeWithVatFile: false });
