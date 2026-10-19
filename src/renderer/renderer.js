@@ -634,7 +634,7 @@ function buildChecklistRow(item, entry) {
     const uploadedTime = entry.uploadedAt
       ? new Date(entry.uploadedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })
       : null;
-    link.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})${entry.manual ? ' (recznie)' : ''}${uploadedTime ? ` - wgrano do PartnerTax (${uploadedTime})` : ''}`;
+    link.textContent = `${item.platformLabel} - ${accountLabel}: ${fileName} (${time})${entry.manual ? ' (recznie)' : ''}${entry.recovered ? ' (odtworzone z folderu)' : ''}${uploadedTime ? ` - wgrano do PartnerTax (${uploadedTime})` : ''}`;
     link.onclick = async () => {
       const result = await window.api.showDownloadedFile(entry.filePath);
       if (!result.ok) await askDecision({ title: 'Nie mozna pokazac pliku', message: result.error, tone: 'danger', actions: [{ id: 'ok', label: 'OK' }] });

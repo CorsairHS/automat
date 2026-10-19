@@ -14,6 +14,7 @@ const { readSessionState, writeSessionState } = require('./automation/browserSes
 const { autoUpdater } = require('electron-updater');
 const logger = require('./logger');
 const { saveDownloadsState, loadDownloadsState } = require('./downloadsState');
+const { recoverDownloads, readUploadedPathsFromLogs } = require('./downloadsRecovery');
 
 // Przekazuje stan autoUpdatera do zakladki "Aktualizacje" w rendererze (patrz
 // renderUpdatesSection w renderer.js) - oprocz logowania do pliku, partner widzi ten sam
@@ -114,6 +115,31 @@ function restoreDownloads() {
   for (const [key, entry] of defaultMap) lastDownloads.set(key, entry);
   for (const [key, entry] of gwarantMap) lastGwarantDownloads.set(key, entry);
   logger.info(`[downloads] wczytano liste pobran: ${defaultMap.size} + gwarant ${gwarantMap.size}`);
+
+  // Konta bez wpisu - probujemy odtworzyc z folderu pobranych (patrz downloadsRecovery.js).
+  // Tylko grupa domyslna: kopia konta w Gwarancie ma ta sama etykiete, wiec i ten sam
+  // folder pobran - nie da sie odroznic, dla ktorej listy plik byl pobrany.
+  try {
+    const accounts = PLATFORMS.filter((p) => p.multiAccount && p.report).flatMap((platform) =>
+      credentialStore
+        .listAccounts(platform.id, 'default')
+        .filter((account) => !lastDownloads.has(`${platform.id}:${account.accountId}`))
+        .map((account) => ({ platformId: platform.id, platformLabel: platform.label, account }))
+    );
+    if (accounts.length === 0) return;
+    const recovered = recoverDownloads({
+      userDataDir: app.getPath('userData'),
+      accounts,
+      uploadedPaths: readUploadedPathsFromLogs(path.join(app.getPath('userData'), 'logs')),
+    });
+    for (const entry of recovered) {
+      lastDownloads.set(`${entry.platformId}:${entry.accountId}`, entry);
+      logger.info(`[downloads] odtworzono z folderu${entry.uploadedAt ? ' (juz wgrany)' : ''}: ${entry.filePath}`);
+    }
+    if (recovered.length > 0) persistDownloads();
+  } catch (error) {
+    logger.error(`[downloads] odtwarzanie z folderu nie powiodlo sie: ${error.stack || error.message}`);
+  }
 }
 
 function getOrderedDownloads(downloadsMap) {
@@ -155,7 +181,6 @@ function createWindow() {
 app.whenReady().then(() => {
   logger.init(app.getPath('userData'));
   logger.info('Aplikacja wystartowala.');
-  restoreDownloads();
 
   try {
     if (credentialStore.runMigrations()) {
@@ -164,6 +189,9 @@ app.whenReady().then(() => {
   } catch (error) {
     logger.error(`Migracja magazynu kont nie powiodla sie: ${error.stack || error.message}`);
   }
+
+  // Po migracji kont - odtwarzanie z folderu czyta liste kont.
+  restoreDownloads();
 
   if (!safeStorage.isEncryptionAvailable()) {
     logger.warn('safeStorage encryption niedostepne na tym systemie - dane logowania bylyby zapisywane bez szyfrowania.');
@@ -609,6 +637,11 @@ ipcMain.handle('reports:delete', async (event) => {
   try {
     const result = await runDeleteReports(app.getPath('userData'), partnertaxAccount, { statusCallback });
     logger.info(`[delete] sukces, usunieto: ${result.deletedCount}`);
+    // Raporty zniknely z rozliczenia - pliki z listy trzeba moc wgrac ponownie.
+    if (result.deletedCount > 0) {
+      for (const entry of [...lastDownloads.values(), ...lastGwarantDownloads.values()]) delete entry.uploadedAt;
+      persistDownloads();
+    }
     return { ok: true, count: result.deletedCount, diagnostics: result.diagnostics };
   } catch (error) {
     logger.error(`[delete] blad: ${error.stack || error.message}`);

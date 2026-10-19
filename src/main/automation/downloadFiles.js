@@ -79,4 +79,4 @@ function attachManualFile({ platformId, account, sourcePath, downloadDir, force 
   return { ok: true, filePath: targetPath };
 }
 
-module.exports = { getDownloadDir, renameDownloadedFile, attachManualFile, uploadFileName };
+module.exports = { getDownloadDir, renameDownloadedFile, attachManualFile, uploadFileName, sanitizeFileNamePart };
