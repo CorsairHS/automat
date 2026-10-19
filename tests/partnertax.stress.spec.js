@@ -211,6 +211,32 @@ test.describe('PartnerTax admin resilience', () => {
     expect(mock.state.savedSources).toHaveLength(1);
   });
 
+  test('"Zatrzymaj" w trakcie zapisu 1. pliku: plik dokonczony, bez pytania o akceptacje, wznowienie od 2.', async () => {
+    const context = await browser.newContext();
+    const mock = await installPartnerTaxMock(context, {});
+    const uploads = [makeUpload({ platformId: 'bolt' }), makeUpload({ platformId: 'uber' }), makeUpload({ platformId: 'freenow' })];
+    let stopRequested = false;
+    let askedCount = 0;
+
+    let caughtError;
+    try {
+      await uploadToPartnerTax({
+        context, account: makeAccount(), uploads,
+        // Klik "Zatrzymaj" w momencie, gdy automat dodaje 1. plik.
+        statusCallback: (msg) => { if (msg.startsWith('Dodaje Data source')) stopRequested = true; },
+        shouldStop: () => stopRequested,
+        confirmAfterEach: async () => { askedCount += 1; return 'continue'; },
+      });
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeInstanceOf(UploadStoppedError);
+    expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt']);
+    expect(askedCount).toBe(0);
+    expect(mock.state.savedSources).toHaveLength(1);
+  });
+
   test('confirmAfterEach "continue": wszystkie wgrane, brak pytania po ostatnim pliku', async () => {
     const context = await browser.newContext();
     const mock = await installPartnerTaxMock(context, {});

@@ -377,6 +377,9 @@ async function uploadToPartnerTax({ context, account, uploads, statusCallback, s
       const upload = uploads[index];
       await addDataSourceFile(page, upload, statusCallback);
       succeeded.push(upload);
+      // "Zatrzymaj" klikniete w trakcie zapisu tego pliku - konczymy od razu, bez pytania o
+      // akceptacje (wczesniej pytanie i tak sie pokazywalo, a "Dalej" wgrywalo kolejny plik).
+      if (shouldStop?.()) throw new UploadStoppedError();
       // Akceptacja po kazdym pliku - po ostatnim nie ma juz czego akceptowac, wiec nie pytamy.
       if (confirmAfterEach && index < uploads.length - 1) {
         const decision = await confirmAfterEach(upload, index, uploads.length);

@@ -1116,7 +1116,10 @@ function buildUploadRow({ source, buttonLabel, toggleKey, refreshChecklist }) {
       document.querySelectorAll('.decision-overlay--upload').forEach((el) => el.remove());
     }
     if (result.ok) statusSpan.textContent = `Gotowe: wgrano ${result.count} plik(ow).`;
-    else if (result.stopped) statusSpan.textContent = `Zatrzymano: wgrano ${result.count} plik(ow). Pozostale zostaja na liscie - "${buttonLabel}" dokonczy reszte.`;
+    else if (result.stopped) {
+      const next = result.nextFile ? ` Nastepny przy wznowieniu: ${result.nextFile.position}/${result.nextFile.total} - ${result.nextFile.fileName}.` : '';
+      statusSpan.textContent = `Zatrzymano: wgrano ${result.count} plik(ow).${next} "${buttonLabel}" dokonczy reszte (juz wgrane sa pomijane).`;
+    }
     else statusSpan.textContent = `Blad: ${result.error}`;
     await refreshChecklist();
   };

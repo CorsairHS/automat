@@ -480,13 +480,20 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'defa
 
   const control = { stopRequested: false, resolveConfirm: null };
   uploadControl = control;
+  // Numeracja w pytaniu o akceptacje wg calej listy (razem z juz wgranymi), zeby po
+  // wznowieniu bylo widac "Wgrano 5/15", a nie znowu "1/11".
+  const positionOf = (upload) => allDownloads.indexOf(upload);
   const confirmAfterEach = confirmEach
-    ? (upload, index, total) =>
+    ? (upload) =>
         new Promise((resolve) => {
+          if (control.stopRequested) {
+            resolve('stop');
+            return;
+          }
           control.resolveConfirm = resolve;
           event.sender.send('upload:confirm', {
-            index,
-            total,
+            index: positionOf(upload),
+            total: allDownloads.length,
             platformId: upload.platformId,
             accountId: upload.accountId,
             fileName: path.basename(upload.filePath),
@@ -511,8 +518,14 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'defa
     markUploaded(sourceMap, error.succeededUploads || []);
     if (error instanceof UploadStoppedError) {
       const count = (error.succeededUploads || []).length;
-      logger.info(`[upload] zatrzymano na zyczenie, wgrano: ${count}`);
-      return { ok: false, stopped: true, count };
+      const next = uploads[count];
+      logger.info(`[upload] zatrzymano na zyczenie, wgrano: ${count}${next ? `, nastepny: ${next.filePath}` : ''}`);
+      return {
+        ok: false,
+        stopped: true,
+        count,
+        nextFile: next ? { position: positionOf(next) + 1, total: allDownloads.length, fileName: path.basename(next.filePath) } : null,
+      };
     }
     logger.error(`[upload] blad: ${error.stack || error.message}`);
     return { ok: false, error: error.message };
