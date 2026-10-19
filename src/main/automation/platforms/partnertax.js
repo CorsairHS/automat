@@ -19,8 +19,9 @@ async function pause(page, ms = STEP_DELAY_MS) {
 // Teksty opcji pola "System" w formularzu Data source, po ktorych szukamy wlasciwego
 // wpisu w panelu danego partnera (ID opcji to klucze bazy danych konkretnej instalacji -
 // u kazdego partnera inne, dlatego nie trzymamy ich w kodzie). Pierwszy kandydat jest
-// preferowany przy duplikatach - w panelu Nova sa np. "Bolt"=17 i archiwalne "BOLT"=65,
-// a wlasciwym dla uploadu jest "Bolt". Przy usuwaniu akceptujemy wszystkie wpisy pasujace
+// preferowany przy duplikatach - w panelu Nova sa "BOLT"=65 i "Bolt"=17, a wlasciwym dla
+// uploadu jest "BOLT" (zgloszone przez klienta 2026-10-19); "Bolt" zostaje jako zapas dla
+// paneli bez wariantu wielkimi literami. Przy usuwaniu akceptujemy wszystkie wpisy pasujace
 // po normalizacji (raporty wgrane recznie bywaja pod archiwalnym wariantem - znalezione
 // na zywo 2026-08-21).
 const UPLOAD_MIME_TYPES = {
@@ -30,7 +31,7 @@ const UPLOAD_MIME_TYPES = {
 };
 
 const SYSTEM_LABEL_CANDIDATES = {
-  bolt: ['Bolt'],
+  bolt: ['BOLT', 'Bolt'],
   uber: ['Uber'],
   freenow: ['Freenow'],
   boltfood: ['Bolt Food'],

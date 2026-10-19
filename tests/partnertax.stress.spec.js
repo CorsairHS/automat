@@ -45,7 +45,7 @@ test.describe('PartnerTax admin resilience', () => {
 
     await uploadToPartnerTax({ context, account, uploads: [makeUpload()], statusCallback: () => {} });
 
-    expect(mock.state.savedSources).toEqual([{ system: '17', city: '7', company: '5', file: '1' }]);
+    expect(mock.state.savedSources).toEqual([{ system: '65', city: '7', company: '5', file: '1' }]);
   });
 
   test('upload wielu plikow: czesciowe niepowodzenie zwraca juz zapisane pliki', async () => {
@@ -69,7 +69,7 @@ test.describe('PartnerTax admin resilience', () => {
     expect(caughtError.message).toMatch(/brak opcji "nieznane-miasto" w polu City/i);
     expect(caughtError.succeededUploads.map((u) => u.platformId)).toEqual(['bolt', 'uber']);
     expect(mock.state.savedSources).toEqual([
-      { system: '17', city: '7', company: '5', file: '1' },
+      { system: '65', city: '7', company: '5', file: '1' },
       { system: '32', city: '7', company: '5', file: '1' },
     ]);
   });
@@ -85,7 +85,7 @@ test.describe('PartnerTax admin resilience', () => {
 
     expect(Date.now() - started).toBeGreaterThan(25_000);
     expect(mock.state.saveAttemptCount).toBe(1);
-    expect(mock.state.savedSources).toEqual([{ system: '17', city: '7', company: '5', file: '1' }]);
+    expect(mock.state.savedSources).toEqual([{ system: '65', city: '7', company: '5', file: '1' }]);
   });
 
   test('usuwanie po aliasie systemu: deleteReportsFromPartnerTax konczy sie (nie wisi) i usuwa wiersz', async () => {
@@ -155,11 +155,11 @@ test.describe('PartnerTax admin resilience', () => {
 
   test('niejednoznaczny system: blad zamiast losowego wyboru, formularz nietkniety', async () => {
     const context = await browser.newContext();
-    const mock = await installPartnerTaxMock(context, { systems: [['17', 'BOLT'], ['65', 'bolt']] });
+    const mock = await installPartnerTaxMock(context, { systems: [['17', 'bolt'], ['65', 'BoLt']] });
 
     await expect(
       uploadToPartnerTax({ context, account: makeAccount(), uploads: [makeUpload()], statusCallback: () => {} })
-    ).rejects.toThrow(/niejednoznaczna opcja "Bolt" w polu System/);
+    ).rejects.toThrow(/niejednoznaczna opcja "BOLT" w polu System/);
     expect(mock.state.pendingNewRows).toEqual({});
     expect(mock.state.savedSources).toEqual([]);
   });

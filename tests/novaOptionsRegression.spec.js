@@ -5,7 +5,8 @@ const { SYSTEM_LABEL_CANDIDATES } = require('../src/main/automation/platforms/pa
 
 // ID zahardkodowane w partnertax.js przed refaktorem (2026-08-19) - dopasowanie po
 // tekscie na zrzucie z zywego panelu Nova musi dawac dokladnie te same wartosci.
-const OLD_SYSTEMS = { bolt: '17', uber: '32', freenow: '2', boltfood: '78' };
+// Bolt: od 2026-10-19 wybieramy "BOLT"=65 zamiast "Bolt"=17 (prosba klienta).
+const OLD_SYSTEMS = { bolt: '65', uber: '32', freenow: '2', boltfood: '78' };
 const OLD_CITIES = {
   'wroclaw': '7', 'warszawa': '8', 'legnica': '9', 'krakow': '10',
   'walbrzych/jelenia gora': '11', 'bialystok': '12', 'augustow/suwalki': '13', 'lubin': '14',
