@@ -391,6 +391,18 @@ ipcMain.handle('downloads:exportZip', async () => {
   }
 });
 
+// Wgrane pliki zostaja w Kontroli pobran (klient chce je nadal widziec i moc otworzyc,
+// takze po przerwaniu wgrywania) - tylko oznaczamy je uploadedAt, a upload:run je pomija.
+// Oznaczamy tylko gdy plik konta jest nadal ten sam - plik podmieniony w trakcie wgrywania
+// (reczny plik / "Pobierz teraz") zostaje do wgrania.
+function markUploaded(sourceMap, uploads) {
+  const uploadedAt = new Date().toISOString();
+  for (const u of uploads) {
+    const entry = sourceMap.get(`${u.platformId}:${u.accountId}`);
+    if (entry?.filePath === u.filePath) entry.uploadedAt = uploadedAt;
+  }
+}
+
 // Stan trwajacego wgrywania: flaga "Zatrzymaj" i ewentualne oczekujace pytanie o akceptacje.
 let uploadControl = null;
 
@@ -404,9 +416,14 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'defa
   }
 
   const sourceMap = source === 'gwarant' ? lastGwarantDownloads : lastDownloads;
-  const uploads = getOrderedDownloads(sourceMap);
-  if (uploads.length === 0) {
+  const allDownloads = getOrderedDownloads(sourceMap);
+  // Pliki juz wgrane zostaja na liscie (oznaczone uploadedAt), ale nie wgrywamy ich drugi raz.
+  const uploads = allDownloads.filter((d) => !d.uploadedAt);
+  if (allDownloads.length === 0) {
     return { ok: false, error: 'Brak pobranych plikow do wgrania - najpierw pobierz raporty (Uber/Bolt/FreeNow).' };
+  }
+  if (uploads.length === 0) {
+    return { ok: false, error: 'Wszystkie pliki z listy sa juz wgrane do PartnerTax.' };
   }
 
   const statusCallback = (message) => {
@@ -437,22 +454,14 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'defa
       confirmAfterEach,
       shouldStop: () => control.stopRequested,
     });
-    // Kasujemy tylko wgrane wpisy (plik nadal ten sam) - pliki dodane w trakcie wgrywania
-    // (reczny plik / "Pobierz teraz") zostaja na liscie.
-    for (const u of uploads) {
-      const key = `${u.platformId}:${u.accountId}`;
-      if (sourceMap.get(key)?.filePath === u.filePath) sourceMap.delete(key);
-    }
+    markUploaded(sourceMap, uploads);
     logger.info(`[upload] sukces, wgrano: ${uploads.length}`);
     return { ok: true, count: uploads.length };
   } catch (error) {
     // Pliki, ktore zdazyly sie wgrac przed bledem lub zatrzymaniem, sa juz trwale zapisane
-    // w PartnerTax - wykreslamy je z listy "do wgrania", zeby ponowna proba nie dodala ich
-    // drugi raz (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
-    for (const upload of error.succeededUploads || []) {
-      const key = `${upload.platformId}:${upload.accountId}`;
-      if (sourceMap.get(key)?.filePath === upload.filePath) sourceMap.delete(key);
-    }
+    // w PartnerTax - oznaczamy je jako wgrane, zeby ponowna proba nie dodala ich drugi raz
+    // (patrz komentarz przy error.succeededUploads w uploadToPartnerTax).
+    markUploaded(sourceMap, error.succeededUploads || []);
     if (error instanceof UploadStoppedError) {
       const count = (error.succeededUploads || []).length;
       logger.info(`[upload] zatrzymano na zyczenie, wgrano: ${count}`);
