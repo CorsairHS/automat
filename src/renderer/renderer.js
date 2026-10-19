@@ -1097,19 +1097,27 @@ function buildUploadRow({ source, buttonLabel, toggleKey, refreshChecklist }) {
     await window.api.stopUpload();
   };
 
-  runBtn.onclick = async () => {
+  const restartBtn = document.createElement('button');
+  restartBtn.type = 'button';
+  restartBtn.className = 'btn-secondary';
+  restartBtn.textContent = 'Zacznij od nowa';
+  restartBtn.title = 'Wgrywa cala liste od 1. pliku, takze pliki juz wgrane';
+
+  const startUpload = async ({ restart = false } = {}) => {
     runBtn.disabled = true;
+    restartBtn.disabled = true;
     stopBtn.hidden = false;
     stopBtn.disabled = false;
     uploadStatusElement = statusSpan;
     statusSpan.textContent = 'Uruchamiam przegladarke...';
     let result;
     try {
-      result = await window.api.runUpload({ confirmEach: readToggle(toggleKey), source });
+      result = await window.api.runUpload({ confirmEach: readToggle(toggleKey), source, restart });
     } catch (err) {
       result = { ok: false, error: err && err.message ? err.message : String(err) };
     } finally {
       runBtn.disabled = false;
+      restartBtn.disabled = false;
       stopBtn.hidden = true;
       // Panel akceptacji, ktory moglby zostac otwarty po "Zatrzymaj" z zewnatrz, jest juz
       // nieaktualny.
@@ -1124,7 +1132,24 @@ function buildUploadRow({ source, buttonLabel, toggleKey, refreshChecklist }) {
     await refreshChecklist();
   };
 
+  runBtn.onclick = () => startUpload();
+  restartBtn.onclick = async () => {
+    const choice = await askDecision({
+      title: 'Zaczac wgrywanie od nowa?',
+      message:
+        'Automat wgra do PartnerTax CALA liste od 1. pliku - takze pliki juz wgrane.\n\n' +
+        'Jesli w rozliczeniu sa juz wiersze z tych plikow, najpierw je usun (recznie w adminie albo "usuwanie raportow"), inaczej beda zdublowane.',
+      tone: 'warning',
+      actions: [
+        { id: 'restart', label: 'Zacznij od nowa', className: 'btn-run' },
+        { id: 'cancel', label: 'Anuluj' },
+      ],
+    });
+    if (choice === 'restart') await startUpload({ restart: true });
+  };
+
   runRow.appendChild(runBtn);
+  runRow.appendChild(restartBtn);
   runRow.appendChild(buildAcceptToggle(toggleKey));
   runRow.appendChild(stopBtn);
   runRow.appendChild(statusSpan);

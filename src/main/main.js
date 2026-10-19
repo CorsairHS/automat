@@ -455,7 +455,8 @@ let uploadControl = null;
 
 // source: 'default' (Kontrola pobran) albo 'gwarant' (osobna checklista zakladki Gwarant -
 // wlasny przycisk wgrywania, pliki z lastGwarantDownloads).
-ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'default' } = {}) => {
+// restart: true - przycisk "Zacznij od nowa": kasuje znaczniki "wgrano" i wgrywa cala liste od 1.
+ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'default', restart = false } = {}) => {
   if (uploadControl) return { ok: false, error: 'Wgrywanie juz trwa.' };
   const partnertaxAccount = credentialStore.listAccounts('partnertax')[0];
   if (!partnertaxAccount) {
@@ -463,6 +464,11 @@ ipcMain.handle('upload:run', async (event, { confirmEach = false, source = 'defa
   }
 
   const sourceMap = source === 'gwarant' ? lastGwarantDownloads : lastDownloads;
+  if (restart) {
+    for (const entry of sourceMap.values()) delete entry.uploadedAt;
+    persistDownloads();
+    logger.info(`[upload${source === 'gwarant' ? ' gwarant' : ''}] zacznij od nowa - skasowano znaczniki "wgrano"`);
+  }
   const allDownloads = getOrderedDownloads(sourceMap);
   // Pliki juz wgrane zostaja na liscie (oznaczone uploadedAt), ale nie wgrywamy ich drugi raz.
   const uploads = allDownloads.filter((d) => !d.uploadedAt);
