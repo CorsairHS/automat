@@ -681,7 +681,7 @@ async function renderChecklistSection() {
 
   const note = document.createElement('p');
   note.className = 'platform-note';
-  note.textContent = 'Checkbox zaznacza sie sam po pobraniu pliku w tej sesji. Klik w nazwe pliku pokazuje go w folderze; "Wgraj wlasny plik" podmienia plik konta na wybrany recznie.';
+  note.textContent = 'Checkbox zaznacza sie sam po pobraniu pliku (lista zostaje po restarcie i aktualizacji programu). Klik w nazwe pliku pokazuje go w folderze; "Wgraj wlasny plik" podmienia plik konta na wybrany recznie.';
   section.appendChild(note);
 
   if (reportAccountsCache.length > 0) {
@@ -1149,7 +1149,7 @@ function renderUploadSection() {
 
   const note = document.createElement('p');
   note.className = 'platform-note';
-  note.textContent = 'Wgrywa do pierwszego niezakonczonego rozliczenia (Finished = False) wszystkie pliki pobrane w tej sesji aplikacji (Uber/Bolt/FreeNow "Pobierz teraz" powyzej).';
+  note.textContent = 'Wgrywa do pierwszego niezakonczonego rozliczenia (Finished = False) wszystkie pobrane pliki z Kontroli pobran, ktore nie sa jeszcze wgrane (Uber/Bolt/FreeNow "Pobierz teraz" powyzej).';
   section.appendChild(note);
 
   section.appendChild(buildUploadRow({

@@ -13,6 +13,7 @@ const { validateDownloadedReport, ReportValidationError } = require('./automatio
 const { readSessionState, writeSessionState } = require('./automation/browserSession');
 const { autoUpdater } = require('electron-updater');
 const logger = require('./logger');
+const { saveDownloadsState, loadDownloadsState } = require('./downloadsState');
 
 // Przekazuje stan autoUpdatera do zakladki "Aktualizacje" w rendererze (patrz
 // renderUpdatesSection w renderer.js) - oprocz logowania do pliku, partner widzi ten sam
@@ -87,8 +88,8 @@ process.on('unhandledRejection', (reason) => {
 
 let mainWindow;
 // Ostatni udany download per (platformId, accountId) - zrodlo dla uploadu do
-// PartnerTax admin. Tylko w pamieci procesu (nie trzeba trwalosci miedzy uruchomieniami
-// aplikacji - upload robi sie zaraz po pobraniu). Konta z grupy "gwarant" (patrz
+// PartnerTax admin. Zapisywane na dysku (downloadsState.js) i wczytywane przy starcie -
+// lista ma przetrwac restart i aktualizacje aplikacji. Konta z grupy "gwarant" (patrz
 // credentialStore.listAccounts) trafiaja do OSOBNEJ mapy (lastGwarantDownloads), zeby ich
 // pobrania nigdy nie wplynely na wspolna Kontrole pobran/Pobierz wszystkie/wgrywanie do
 // PartnerTax - Gwarant ma byc calkowicie niezaleznym obiegiem.
@@ -100,6 +101,21 @@ const lastGwarantDownloads = new Map();
 // formularza) - klient chce dokladnie takiej kolejnosci jak w jego ostatnim zamknietym
 // rozliczeniu: firma -> miasto -> platforma (patrz settlementOrder.js), a nie w
 // kolejnosci zakonczenia pobran ani pogrupowane po platformie.
+function persistDownloads() {
+  try {
+    saveDownloadsState(app.getPath('userData'), { defaultMap: lastDownloads, gwarantMap: lastGwarantDownloads });
+  } catch (error) {
+    logger.error(`[downloads] nie udalo sie zapisac listy pobran: ${error.stack || error.message}`);
+  }
+}
+
+function restoreDownloads() {
+  const { defaultMap, gwarantMap } = loadDownloadsState(app.getPath('userData'));
+  for (const [key, entry] of defaultMap) lastDownloads.set(key, entry);
+  for (const [key, entry] of gwarantMap) lastGwarantDownloads.set(key, entry);
+  logger.info(`[downloads] wczytano liste pobran: ${defaultMap.size} + gwarant ${gwarantMap.size}`);
+}
+
 function getOrderedDownloads(downloadsMap) {
   return sortBySettlementOrder(Array.from(downloadsMap.values()));
 }
@@ -115,6 +131,7 @@ function recordDownload(platformId, account, filePath, { manual = false } = {}) 
     downloadedAt: new Date().toISOString(),
     manual,
   });
+  persistDownloads();
 }
 
 function platformLabelOf(platformId) {
@@ -138,6 +155,7 @@ function createWindow() {
 app.whenReady().then(() => {
   logger.init(app.getPath('userData'));
   logger.info('Aplikacja wystartowala.');
+  restoreDownloads();
 
   try {
     if (credentialStore.runMigrations()) {
@@ -401,6 +419,7 @@ function markUploaded(sourceMap, uploads) {
     const entry = sourceMap.get(`${u.platformId}:${u.accountId}`);
     if (entry?.filePath === u.filePath) entry.uploadedAt = uploadedAt;
   }
+  persistDownloads();
 }
 
 // Stan trwajacego wgrywania: flaga "Zatrzymaj" i ewentualne oczekujace pytanie o akceptacje.
